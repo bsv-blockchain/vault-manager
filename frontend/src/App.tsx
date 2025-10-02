@@ -1,5 +1,51 @@
 import { useEffect, useMemo, useRef, useState } from 'react'
-import { PrivateKey, P2PKH, Script, Transaction } from '@bsv/sdk'
+import { PrivateKey, P2PKH, Script, Transaction, PublicKey, ChainTracker } from '@bsv/sdk'
+import { createIdbChaintracks } from '@bsv/wallet-toolbox-client'
+
+class Vault {
+  protocolVersion: number = 1
+  passwordRounds: number = 80085
+  passwordSalt: number[] = new Array(32).fill(0)
+  vaultName: string = 'Vault'
+  vaultRevision: number = 1
+  created: number = Date.now()
+  lastUpdated: number = Date.now()
+  keys: Array<{
+    serial: string,
+    private: PrivateKey,
+    public: PublicKey,
+    usedOnChain: boolean,
+    memo: string
+  }> = []
+  coins: Array<{
+    tx: Transaction,
+    outputIndex: number,
+    value: number,
+    memo: string
+  }> = []
+  transactionLog: Array<{
+    at: number
+    txid: string
+    atomicBEEF: number[]
+    net: number
+    memo: string
+    processed: boolean
+  }> = []
+  vaultLog: Array<{
+    at: number
+    event: string
+  }> = []
+  headerDatastoreHash: string = ''
+  chainTracker: ChainTracker = {
+    isValidRootForHeight: async () => false,
+    currentHeight: async () => 0
+  }
+  saved = false
+  constructor () {
+    this.chainTracker = createNoDbChaintracks()
+  }
+}
+
 
 // ---------- Types & Vault schema ----------
 
