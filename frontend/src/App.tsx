@@ -1,8 +1,7 @@
 import { useEffect, useMemo, useRef, useState } from 'react'
-import { PrivateKey, P2PKH, Script, Transaction, PublicKey, ChainTracker } from '@bsv/sdk'
-import { createIdbChaintracks } from '@bsv/wallet-toolbox-client'
+import { PrivateKey, P2PKH, Script, Transaction, PublicKey, ChainTracker, MerklePath, Utils, Hash, SymmetricKey } from '@bsv/sdk'
 
-class Vault {
+class Vault implements ChainTracker {
   protocolVersion: number = 1
   passwordRounds: number = 80085
   passwordSalt: number[] = new Array(32).fill(0)
@@ -34,223 +33,161 @@ class Vault {
   vaultLog: Array<{
     at: number
     event: string
+    data: string
   }> = []
-  headerDatastoreHash: string = ''
-  chainTracker: ChainTracker = {
-    isValidRootForHeight: async () => false,
-    currentHeight: async () => 0
-  }
+  confirmIncomingCoins = true
+  confirmOutgoingCoins = false
+  persistHeadersOlderThanBlocks: number = 144
+  reverifyRecentHeadersAfterSeconds: number = 60
+  persistedHeaderClaims: Array<{
+    at: number
+    merkleRoot: string
+    height: number
+    memo: string
+  }> = []
+  ephemeralHeaderClaims: Array<{
+    at: number
+    merkleRoot: string
+    height: number
+  }> = []
+  currentBlockHeight: number = 0
+  currentBlockHeightAcquiredAt: number = 0
+  reverifyCurrentBlockHeightAfterSeconds: number = 600
   saved = false
-  constructor () {
-    this.chainTracker = createNoDbChaintracks()
+  sessionLog: Array<{
+    at: number
+    event: string
+  }> = []
+  async isValidRootForHeight (root: string, height: number): Promise<boolean> {
+    const persisted = this.persistedHeaderClaims.findIndex(claim => {
+      return claim.merkleRoot === root && claim.height === height
+    })
+    if (persisted !== -1) {
+      return true
+    }
+    const ephemeral = this.ephemeralHeaderClaims.findIndex(claim => {
+      return claim.merkleRoot === root
+        && claim.height === height
+        && Date.now() - this.reverifyRecentHeadersAfterSeconds < claim.at
+    })
+    if (ephemeral !== -1) {
+      return true
+    }
+    const accepted = window.confirm(`Do you accept and confirm that block # ${height} of the HONEST chain has a merkle root of "${root}"?`)
+    if (!accepted) return false
+    if (this.currentBlockHeight - this.persistHeadersOlderThanBlocks < height) {
+      this.ephemeralHeaderClaims.push({
+        at: Date.now(),
+        height,
+        merkleRoot: root
+      })
+    } else {
+      let memo = window.prompt('Enter the source(s) you used to confirm the validity of this merkle root:')
+      if (!memo) {
+        memo = 'No memo provided.'
+      }
+      this.persistedHeaderClaims.push({
+        at: Date.now(),
+        memo,
+        height,
+        merkleRoot: root
+      })
+    }
+    return true
+  }
+  async currentHeight (): Promise<number> {
+    if (
+      this.currentBlockHeight !== 0
+      && Date.now() - (this.reverifyCurrentBlockHeightAfterSeconds * 1000) < this.currentBlockHeightAcquiredAt
+    ) {
+      return this.currentBlockHeight
+    } else {
+      let height: number = 0
+      do {
+        try {
+          const heightInput = window.prompt('Enter the current block height for the HONEST chain:')
+          const heightNumber = Number(heightInput)
+          if (Number.isInteger(heightNumber) && heightNumber > 0) {
+            height = heightNumber
+          } else {
+            window.alert('Height must be a positive integer, try again.')
+          }
+        } catch (e) {
+          window.alert((e as any).message || 'Error processing height, try again.')
+        }
+      } while (height === 0)
+      this.currentBlockHeight = height
+      this.currentBlockHeightAcquiredAt = Date.now()
+      return height
+    }
+  }
+  logSession (event: string): void {
+    this.sessionLog.push({
+      at: Date.now(),
+      event
+    })
+  }
+  logVault (event: string, data: string = ''): void {
+    this.vaultLog.push({
+      at: Date.now(),
+      event,
+      data
+    })
+  }
+  static loadFromFile (file: number[]): Vault {
+    const v = new Vault()
+    v.logSession(`Started new vault session loading from vault file of size ${file.length} ...`)
+    const fileHash = Utils.toHex(Hash.sha256(file))
+    v.logSession(`SHA-256 hash of vault file: ${fileHash}`)
+    v.logSession('Verifying this hash with the user...')
+    const hashVerified = window.confirm(`Ensure that the SHA-256 hash of your vault file from the previous session matches this value: ${fileHash}`)
+    if (!hashVerified) {
+      throw new Error('Vault file SHA-256 has not been verified.')
+    }
+    v.logSession('The SHA-256 hash has been verified by the user.')
+    const r = new Utils.Reader(file)
+    // Read vault protocol version
+    const protocolVersion = r.readVarIntNum()
+    if (protocolVersion !== v.protocolVersion) {
+      throw new Error(`Vault protocol version # ${protocolVersion} from the file is not the same as this software, which uses version # ${v.protocolVersion}.`)
+    }
+    v.logSession(`Tbe software has found the vault protocol version to be correct. The vault uses protocol version # ${protocolVersion}`)
+
+    // Read password rounds
+    const passwordRounds = r.readVarIntNum()
+    if (passwordRounds < 1) {
+      throw new Error('Vault password rounds must be 1 or higher.')
+    }
+    v.passwordRounds = passwordRounds
+    
+    // Read password salt
+    const passwordSalt = r.read(32)
+    const encryptedVaultData = r.read()
+    v.logSession('Read password rounds and salt, prompting for the password...')
+
+    // Acquire password loop
+    let decrypted: number[] = []
+    do {
+      const passwordString = window.prompt('Enter vault password:')
+      const password = Utils.toArray(passwordString)
+      const key = Hash.pbkdf2(password, passwordSalt, passwordRounds, 32)
+      const symmetricKey = new SymmetricKey(key)
+      try {
+        decrypted = symmetricKey.decrypt(encryptedVaultData) as number[]
+        v.logSession('Provided password succeeded in unlocking the vault.')
+      } catch {
+        v.logSession('Provided password failed to unlock the vault.')
+        window.alert('Failed to unlock the vault.')
+      }
+    } while (decrypted.length === 0)
+    
+    // deserialize decrypted vault payload
+    const d = new Utils.Reader(decrypted)
+    
+
+    return v
   }
 }
-
-
-// ---------- Types & Vault schema ----------
-
-type Hex = string
-
-type KeySerial = string // monotonically increasing string (e.g., "K0001")
-type UTXOId = string // `${txid}_${vout}`
-
-type ScriptKind = 'p2pkh' | 'p2pk'
-
-type KeyRecord = {
-  serial: KeySerial
-  memo?: string
-  createdAt: string
-  // storage
-  privWifEnc: string // encrypted per-vault master key, but here we rely on vault encryption; we still never show PK
-  // public
-  pubkeyHex: Hex
-  pkhHex: Hex
-  p2pkhLockHex: Hex
-  address: string
-  // usage
-  used: boolean
-}
-
-type TxRecord = {
-  txid: string
-  beefHex?: string // BRC-62 hex (incoming or for archival)
-  atomicBeefHex?: string // BRC-95 for outgoing
-  rawHex?: string // transaction hex
-  processed: boolean // user marks processed after saving
-  memo?: string
-  seenAt: string
-  direction: 'incoming' | 'outgoing'
-  spvValid?: boolean // result of verify()
-  // Optional: embedded merkle path attached by sdk in tx.merklePath when created from BEEF
-}
-
-type UTXORecord = {
-  id: UTXOId
-  txid: string
-  vout: number
-  satoshis: number
-  lockHex: Hex
-  scriptKind: ScriptKind
-  keySerial: KeySerial
-  memo?: string
-  seenAt: string
-  spent: boolean
-  // store ancestry proofs so future usage is still anchored even if new proof isn't provided
-  ancestryProofs?: {
-    // minimal: if BEEF carried inputs + bumps, sdk will thread them; we only need to keep original BEEF
-    beefHex?: string
-  }
-  sourceProcessed: boolean // warns if input from unprocessed tx
-}
-
-type HeaderEntry = {
-  height: number
-  // store merkle root as big-endian hex (standard display)
-  merkleRootHex: Hex
-}
-
-type HeaderStore = {
-  // height => merkle root hex
-  [height: number]: string
-}
-
-type VaultPlain = {
-  version: 'bsvlt-1'
-  vaultId: string
-  createdAt: string
-  updatedAt: string
-  keys: KeyRecord[]
-  txs: TxRecord[]
-  utxos: UTXORecord[]
-  headers: HeaderStore
-  headerTip?: number
-  warnings: string[]
-  // track if the user confirmed rotating vault file
-  userConfirmedRotation?: boolean
-}
-
-type VaultFileEnvelope = {
-  fileVersion: 'bsvlt-1'
-  cipher: 'AES-GCM'
-  kdf: { name: 'PBKDF2'; hash: 'SHA-256'; iterations: number }
-  saltB64: string
-  ivB64: string
-  ciphertextB64: string
-  // optional sanity: sha256 of plaintext JSON (hex) to detect mismatch
-  plainHashHex?: string
-  savedAt: string
-}
-
-// ---------- Utils: enc/dec, crypto ----------
-
-const textEncoder = new TextEncoder()
-const textDecoder = new TextDecoder()
-
-const fromHex = (hex: string): Uint8Array => {
-  const clean = hex.replace(/[^0-9a-f]/gi, '')
-  if (clean.length % 2 !== 0) throw new Error('hex length')
-  const out = new Uint8Array(clean.length / 2)
-  for (let i = 0; i < out.length; i++) out[i] = parseInt(clean.substr(i * 2, 2), 16)
-  return out
-}
-const toHex = (bytes: ArrayLike<number>) =>
-  Array.prototype.map.call(bytes, (b: number) => ('00' + b.toString(16)).slice(-2)).join('')
-
-const b64e = (bytes: Uint8Array) => btoa(String.fromCharCode(...bytes))
-const b64d = (b64: string) => Uint8Array.from(atob(b64), c => c.charCodeAt(0))
-
-async function pbkdf2(password: string, salt: Uint8Array, iterations = 310_000): Promise<CryptoKey> {
-  const material = await crypto.subtle.importKey('raw', textEncoder.encode(password), 'PBKDF2', false, ['deriveKey'])
-  return crypto.subtle.deriveKey(
-    { name: 'PBKDF2', hash: 'SHA-256', salt, iterations },
-    material,
-    { name: 'AES-GCM', length: 256 },
-    false,
-    ['encrypt', 'decrypt']
-  )
-}
-
-async function aesGcmEncrypt(plain: Uint8Array, password: string, iterations = 310_000) {
-  const iv = crypto.getRandomValues(new Uint8Array(12))
-  const salt = crypto.getRandomValues(new Uint8Array(16))
-  const key = await pbkdf2(password, salt, iterations)
-  const ciphertext = new Uint8Array(await crypto.subtle.encrypt({ name: 'AES-GCM', iv }, key, plain))
-  return { iv, salt, ciphertext }
-}
-
-async function aesGcmDecrypt(ciphertext: Uint8Array, password: string, iv: Uint8Array, salt: Uint8Array, iterations = 310_000) {
-  const key = await pbkdf2(password, salt, iterations)
-  const plain = await crypto.subtle.decrypt({ name: 'AES-GCM', iv }, key, ciphertext)
-  return new Uint8Array(plain)
-}
-
-function sha256Hex(str: string) {
-  const bytes = textEncoder.encode(str)
-  return crypto.subtle.digest('SHA-256', bytes).then(buf => toHex(new Uint8Array(buf)))
-}
-
-function nowIso() { return new Date().toISOString() }
-function uuid4() {
-  // simple UUID v4
-  const b = crypto.getRandomValues(new Uint8Array(16))
-  b[6] = (b[6] & 0x0f) | 0x40
-  b[8] = (b[8] & 0x3f) | 0x80
-  const hex = toHex(b)
-  return `${hex.slice(0,8)}-${hex.slice(8,12)}-${hex.slice(12,16)}-${hex.slice(16,20)}-${hex.slice(20)}`
-}
-
-// ---------- Local ChainTracker (headers-backed) ----------
-// Minimal interface: a class with isValidRootForHeight(root, height) => boolean|Promise<boolean>
-// Mirrors the SDK mock header client pattern; we just look up stored merkle root.
-class LocalHeadersChainTracker /* implements ChainTracker */ {
-  private roots: HeaderStore
-  constructor(roots: HeaderStore) { this.roots = roots }
-  setRoots(roots: HeaderStore) { this.roots = roots }
-  async isValidRootForHeight(root: string, height: number): Promise<boolean> {
-    const known = this.roots[height]
-    return typeof known === 'string' && known.toLowerCase() === root.toLowerCase()
-  }
-}
-
-// ---------- Vault helpers ----------
-
-function nextSerial(keys: KeyRecord[]): KeySerial {
-  const n = keys.length
-  const next = n + 1
-  return 'K' + next.toString().padStart(4, '0')
-}
-
-function keyToRecords(priv: PrivateKey, memo?: string): Omit<KeyRecord, 'privWifEnc' | 'used'> & { used: boolean, privWifEnc: string } {
-  const pub = priv.toPublicKey()
-  const pkh = pub.toHash() as number[]
-  const p2pkh = new P2PKH().lock(pkh)
-  const address = new P2PKH().lock(pkh).toString?.() || (new P2PKH().lock(pkh) as any)
-  return {
-    serial: '', // filled later
-    memo,
-    createdAt: nowIso(),
-    privWifEnc: 'vault-encrypted', // full vault encryption layer; we never show PK
-    pubkeyHex: toHex(pub.toDER()), // DER-encoded public key
-    pkhHex: toHex(pkh),
-    p2pkhLockHex: p2pkh.toHex(),
-    address: (address as any) || '', // many templates stringify to ASM; we’ll derive proper address below
-    used: false
-  }
-}
-
-function scriptKindOf(lockHex: string): ScriptKind {
-  // heuristic: P2PKH structure: OP_DUP OP_HASH160 0x14 <20B> OP_EQUALVERIFY OP_CHECKSIG
-  const asm = Script.fromHex(lockHex).toASM()
-  if (/^OP_DUP OP_HASH160 [0-9a-fA-F]{40} OP_EQUALVERIFY OP_CHECKSIG$/.test(asm)) return 'p2pkh'
-  // fallback assume P2PK
-  return 'p2pk'
-}
-
-function utxoId(txid: string, vout: number): UTXOId { return `${txid}_${vout}` }
-
-function sumSats(utxos: UTXORecord[]) { return utxos.filter(u => !u.spent).reduce((a, b) => a + b.satoshis, 0) }
-
-// ---------- React App ----------
 
 export default function App() {
   // vault state (plaintext, in-memory)
@@ -273,12 +210,6 @@ export default function App() {
   const [updatedHeadersThisSession, setUpdatedHeadersThisSession] = useState(false)
   const [banner, setBanner] = useState<string | null>(null)
   const [saveConfirmed, setSaveConfirmed] = useState(false)
-
-  // headers chain tracker
-  const chainTrackerRef = useRef(new LocalHeadersChainTracker(vault.headers))
-  useEffect(() => {
-    chainTrackerRef.current.setRoots(vault.headers)
-  }, [vault.headers])
 
   // banner logic
   useEffect(() => {
@@ -352,36 +283,6 @@ export default function App() {
     URL.revokeObjectURL(url)
     setOpenedEnvelope(env)
     setDirty(false)
-  }
-
-  // ---------- Headers ingest ----------
-
-  // Accept "startHeight" and a blob of hex headers (80 bytes / 160 hex chars per line)
-  const [startHeight, setStartHeight] = useState<number>(0)
-  const [headersPaste, setHeadersPaste] = useState('')
-  function parseHeaderMerkleRootHex(headerHex: string): string {
-    // Bitcoin header: [version(4)|prev(32)|merkle(32)|time(4)|bits(4)|nonce(4)] little-endian fields
-    const clean = headerHex.trim().toLowerCase()
-    if (clean.length !== 160) throw new Error('Header must be 80 bytes (160 hex chars)')
-    // merkle root bytes at offset 36..68 (little-endian); convert to big-endian hex
-    const merkleLE = clean.slice(72, 136)
-    const bytes = fromHex(merkleLE)
-    const be = toHex([...bytes].reverse())
-    return be
-  }
-  function onAddHeaders() {
-    const lines = headersPaste.split(/\r?\n/).map(l => l.trim()).filter(Boolean)
-    const updates: HeaderStore = { ...vault.headers }
-    let h = startHeight
-    for (const line of lines) {
-      const hex = line.replace(/\s+/g, '')
-      const root = parseHeaderMerkleRootHex(hex)
-      updates[h] = root
-      h++
-    }
-    updateVault(v => { v.headers = updates; v.headerTip = Math.max(...Object.keys(updates).map(Number)) })
-    setUpdatedHeadersThisSession(true)
-    setHeadersPaste('')
   }
 
   // ---------- Key generation ----------
@@ -728,19 +629,6 @@ export default function App() {
             <input type="checkbox" checked={saveConfirmed} onChange={e => setSaveConfirmed(e.target.checked)} /> I saved the new file and deleted the previous version
           </label>
         </div>
-      </section>
-
-      <section style={{ border: '1px solid #ddd', padding: 12, marginBottom: 16 }}>
-        <h2>Sync Vault Headers (offline paste)</h2>
-        <div style={{ display: 'flex', gap: 12, alignItems: 'center' }}>
-          <label>Start height: <input type="number" value={startHeight} onChange={e => setStartHeight(parseInt(e.target.value || '0'))} /></label>
-          <button onClick={onAddHeaders}>Add headers</button>
-        </div>
-        <textarea value={headersPaste} onChange={e => setHeadersPaste(e.target.value)} placeholder="One 80-byte block header per line (hex)" rows={6} style={{ width: '100%', marginTop: 8 }} />
-        <div style={{ marginTop: 8, fontSize: 12, color: '#555' }}>
-          Tip: Each line must be exactly 80 bytes (160 hex). We store the Merkle root per height and verify BEEF/BUMP SPV proofs entirely offline.
-        </div>
-        <div style={{ marginTop: 8 }}>Known headers: {Object.keys(vault.headers).length} {vault.headerTip != null && `(tip: #${vault.headerTip})`}</div>
       </section>
 
       <section style={{ border: '1px solid #ddd', padding: 12, marginBottom: 16 }}>
