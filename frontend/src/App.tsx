@@ -10,25 +10,24 @@ class Vault implements ChainTracker {
   created: number = Date.now()
   lastUpdated: number = Date.now()
   keys: Array<{
-    serial: string,
-    private: PrivateKey,
-    public: PublicKey,
-    usedOnChain: boolean,
+    serial: string
+    private: PrivateKey
+    public: PublicKey
+    usedOnChain: boolean
     memo: string
   }> = []
   coins: Array<{
-    tx: Transaction,
-    outputIndex: number,
-    value: number,
+    tx: Transaction
+    outputIndex: number
     memo: string
   }> = []
   transactionLog: Array<{
     at: number
-    txid: string
     atomicBEEF: number[]
     net: number
     memo: string
     processed: boolean
+    txid: string
   }> = []
   vaultLog: Array<{
     at: number
@@ -39,6 +38,7 @@ class Vault implements ChainTracker {
   confirmOutgoingCoins = false
   persistHeadersOlderThanBlocks: number = 144
   reverifyRecentHeadersAfterSeconds: number = 60
+  reverifyCurrentBlockHeightAfterSeconds: number = 600
   persistedHeaderClaims: Array<{
     at: number
     merkleRoot: string
@@ -52,7 +52,6 @@ class Vault implements ChainTracker {
   }> = []
   currentBlockHeight: number = 0
   currentBlockHeightAcquiredAt: number = 0
-  reverifyCurrentBlockHeightAfterSeconds: number = 600
   saved = false
   sessionLog: Array<{
     at: number
@@ -183,7 +182,116 @@ class Vault implements ChainTracker {
     
     // deserialize decrypted vault payload
     const d = new Utils.Reader(decrypted)
-    
+
+    // Read vault name
+    const vaultNameLength = d.readVarIntNum()
+    v.vaultName = Utils.toUTF8(d.read(vaultNameLength))
+    v.logSession(`Vault name read: ${v.vaultName}`)
+
+    // Read vault revision
+    v.vaultRevision = d.readVarIntNum()
+    v.logSession(`Vault revision read: ${v.vaultRevision}`)
+
+    // Read created / updated timestamps
+    v.created = d.readVarIntNum()
+    v.logSession(`Vault creation time read: ${v.created}`)
+    v.lastUpdated = d.readVarIntNum()
+    v.logSession(`Vault last updated: ${v.lastUpdated}`)
+
+    // read keys
+    const numberOfKeys = d.readVarIntNum()
+    v.logSession(`Loading ${numberOfKeys} ${numberOfKeys === 1 ? 'key' : 'keys'} from the vault.`)
+    for (let i = 0; i < numberOfKeys; i++) {
+      const serialLength = d.readVarIntNum()
+      const serial = Utils.toUTF8(d.read(serialLength))
+      const privateKey = new PrivateKey(d.read(32))
+      const publicKey = privateKey.toPublicKey()
+      const usedOnChain = d.readVarIntNum() !== 0
+      const memoLength = d.readVarIntNum()
+      const memo = Utils.toUTF8(d.read(memoLength))
+      v.keys.push({
+        serial,
+        private: privateKey,
+        public: publicKey,
+        usedOnChain,
+        memo
+      })
+    }
+
+    // read coins
+    const numberOfCoins = d.readVarIntNum()
+    v.logSession(`Loading ${numberOfCoins} ${numberOfCoins === 1 ? 'coin' : 'coins'} from the vault.`)
+    for (let i = 0; i < numberOfCoins; i++) {
+      const txLength = d.readVarIntNum()
+      const tx = Transaction.fromAtomicBEEF(d.read(txLength))
+      const outputIndex = d.readVarIntNum()
+      const memoLength = d.readVarIntNum()
+      const memo = Utils.toUTF8(d.read(memoLength))
+      v.coins.push({
+        tx,
+        outputIndex,
+        memo
+      })
+    }
+
+    // read transactions
+    const numberOfTxs = d.readVarIntNum()
+    for (let i = 0; i < numberOfTxs; i++) {
+      const at = d.readVarIntNum()
+      const txLength = d.readVarIntNum()
+      const atomicBEEF = d.read(txLength)
+      const net = d.readVarIntNum()
+      const memoLength = d.readVarIntNum()
+      const memo = Utils.toUTF8(d.read(memoLength))
+      const processed = d.readVarIntNum() !== 0
+      v.transactionLog.push({
+        at,
+        atomicBEEF,
+        net,
+        memo,
+        processed,
+        txid: Transaction.fromAtomicBEEF(atomicBEEF).id('hex')
+      })
+    }
+
+    // vault log
+    const numberOfVaultLogs = d.readVarIntNum()
+    for (let i = 0; i < numberOfVaultLogs; i++) {
+      const at = d.readVarIntNum()
+      const eventLength = d.readVarIntNum()
+      const event = Utils.toUTF8(d.read(eventLength))
+      const dataLength = d.readVarIntNum()
+      const data = Utils.toUTF8(d.read(dataLength))
+      v.vaultLog.push({
+        at,
+        event,
+        data
+      })
+    }
+
+    // Read settings
+    v.confirmIncomingCoins = d.readVarIntNum() !== 0
+    v.confirmOutgoingCoins = d.readVarIntNum() !== 0
+    v.persistHeadersOlderThanBlocks = d.readVarIntNum()
+    v.reverifyRecentHeadersAfterSeconds = d.readVarIntNum()
+    v.reverifyCurrentBlockHeightAfterSeconds = d.readVarIntNum()
+
+    // Read persisted headres
+    const numberOfPersistedHeaderClaims = d.readVarIntNum()
+    for (let i = 0; i < numberOfPersistedHeaderClaims; i++) {
+      const at = d.readVarIntNum()
+      const merkleRootLength = d.readVarIntNum()
+      const merkleRoot = Utils.toUTF8(d.read(merkleRootLength))
+      const height = d.readVarIntNum()
+      const memoLength = d.readVarIntNum()
+      const memo = Utils.toUTF8(d.read(memoLength))
+      v.persistedHeaderClaims.push({
+        at,
+        merkleRoot,
+        height,
+        memo
+      })
+    }
 
     return v
   }
