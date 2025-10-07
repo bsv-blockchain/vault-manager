@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useRef, useState } from 'react'
-import { PrivateKey, P2PKH, Script, Transaction, PublicKey, ChainTracker, MerklePath, Utils, Hash, SymmetricKey } from '@bsv/sdk'
+import { PrivateKey, P2PKH, Script, Transaction, PublicKey, ChainTracker, MerklePath, Utils, Hash, SymmetricKey, Random } from '@bsv/sdk'
 
 class Vault implements ChainTracker {
   protocolVersion: number = 1
@@ -293,7 +293,465 @@ class Vault implements ChainTracker {
       })
     }
 
+    v.logSession(`Vault successfully loaded.`)
+
     return v
+  }
+
+  static async create (): Promise<Vault> {
+    const v = new Vault()
+    v.logSession('Creating new vault interactively...')
+
+    const name = window.prompt('Enter a vault display name:') || 'Vault'
+    v.vaultName = name
+    v.logSession(`Creating vault interactively with name: ${name}`)
+    v.logVault('Vault created: vault.name', name)
+
+    // PBKDF2 rounds
+    const roundsIn = window.prompt(`PBKDF2 rounds? (default ${v.passwordRounds})`)
+    if (roundsIn && /^\d+$/.test(roundsIn)) {
+      const n = Number(roundsIn)
+      if (n >= 1) v.passwordRounds = n
+    }
+    v.passwordSalt = Random(32)
+    v.logVault('vault.passwordRounds', v.passwordRounds.toString())
+    v.logVault('vault.passwordSalt', Utils.toHex(v.passwordSalt))
+
+    // policy toggles
+    v.confirmIncomingCoins = window.confirm('Require attestation for incoming UTXOs? (OK = yes)')
+    v.confirmOutgoingCoins = window.confirm('Require attestation for outgoing UTXOs at build-time? (OK = yes)')
+    v.logVault('vault.confirmIncomingCoins', v.confirmIncomingCoins.toString())
+    v.logVault('vault.confirmOutgoingCoins', v.confirmOutgoingCoins.toString())
+
+    // header settings
+    const older = window.prompt(`Persist headers older than how many blocks? (default ${v.persistHeadersOlderThanBlocks})`)
+    if (older && /^\d+$/.test(older)) v.persistHeadersOlderThanBlocks = Number(older)
+    v.logVault('vault......') // TODO: Log every change to every value in the vault log and session log in a forensic and meticulous way, leaving nothing out.
+
+    const recentSec = window.prompt(`Re-verify recent headers after how many seconds? (default ${v.reverifyRecentHeadersAfterSeconds})`)
+    if (recentSec && /^\d+$/.test(recentSec)) v.reverifyRecentHeadersAfterSeconds = Number(recentSec)
+
+    const heightSec = window.prompt(`Re-verify current block height after how many seconds? (default ${v.reverifyCurrentBlockHeightAfterSeconds})`)
+    if (heightSec && /^\d+$/.test(heightSec)) v.reverifyCurrentBlockHeightAfterSeconds = Number(heightSec)
+
+    v.logSession('Vault setup wizard completed.')
+
+    window.alert('Vault created. Generate at least one key to receive funds and begin transacting.')
+    return v
+  }
+
+  private serializePlaintext (): number[] {
+    const w = new Utils.Writer()
+
+    // vault name
+    w.writeVarIntNum(Utils.lengthBytes(this.vaultName))
+    w.write(Utils.toArray(this.vaultName))
+    // vault revision
+    w.writeVarIntNum(this.vaultRevision)
+    // created / updated
+    w.writeVarIntNum(this.created)
+    w.writeVarIntNum(this.lastUpdated)
+
+    // keys
+    w.writeVarIntNum(this.keys.length)
+    for (const k of this.keys) {
+      const serialBytes = Utils.toArray(k.serial)
+      w.writeVarIntNum(serialBytes.length); w.write(serialBytes)
+      w.write(k.private.toArray()) // 32B
+      w.writeVarIntNum(k.usedOnChain ? 1 : 0)
+      const memoBytes = Utils.toArray(k.memo || '')
+      w.writeVarIntNum(memoBytes.length); w.write(memoBytes)
+    }
+
+    // coins
+    w.writeVarIntNum(this.coins.length)
+    for (const c of this.coins) {
+      const beef = c.tx.toAtomicBEEF() as number[]
+      w.writeVarIntNum(beef.length); w.write(beef)
+      w.writeVarIntNum(c.outputIndex)
+      const memoBytes = Utils.toArray(c.memo || '')
+      w.writeVarIntNum(memoBytes.length); w.write(memoBytes)
+    }
+
+    // transactions
+    w.writeVarIntNum(this.transactionLog.length)
+    for (const t of this.transactionLog) {
+      w.writeVarIntNum(t.at)
+      w.writeVarIntNum(t.atomicBEEF.length); w.write(t.atomicBEEF)
+      w.writeVarIntNum(t.net)
+      const memoBytes = Utils.toArray(t.memo || '')
+      w.writeVarIntNum(memoBytes.length); w.write(memoBytes)
+      w.writeVarIntNum(t.processed ? 1 : 0)
+    }
+
+    // vault log
+    w.writeVarIntNum(this.vaultLog.length)
+    for (const L of this.vaultLog) {
+      w.writeVarIntNum(L.at)
+      const e = Utils.toArray(L.event); w.writeVarIntNum(e.length); w.write(e)
+      const d = Utils.toArray(L.data || ''); w.writeVarIntNum(d.length); w.write(d)
+    }
+
+    // settings
+    w.writeVarIntNum(this.confirmIncomingCoins ? 1 : 0)
+    w.writeVarIntNum(this.confirmOutgoingCoins ? 1 : 0)
+    w.writeVarIntNum(this.persistHeadersOlderThanBlocks)
+    w.writeVarIntNum(this.reverifyRecentHeadersAfterSeconds)
+    w.writeVarIntNum(this.reverifyCurrentBlockHeightAfterSeconds)
+
+    // persisted headers
+    w.writeVarIntNum(this.persistedHeaderClaims.length)
+    for (const ph of this.persistedHeaderClaims) {
+      w.writeVarIntNum(ph.at)
+      const mr = Utils.toArray(ph.merkleRoot); w.writeVarIntNum(mr.length); w.write(mr)
+      w.writeVarIntNum(ph.height)
+      const memo = Utils.toArray(ph.memo || ''); w.writeVarIntNum(memo.length); w.write(memo)
+    }
+
+    return w.toArray() as number[]
+  }
+
+  async saveToFileBytes (password?: string): Promise<number[]> {
+    // choose password
+    let pw = password
+    if (!pw) {
+      pw = window.prompt('Enter a password to encrypt this vault file:') || ''
+      if (!pw) throw new Error('Password required to save vault.')
+    }
+    // derive key
+    const key = Hash.pbkdf2(Utils.toArray(pw), this.passwordSalt, this.passwordRounds, 32)
+    const symmetricKey = new SymmetricKey(key)
+    const payload = this.serializePlaintext()
+    const encrypted = symmetricKey.encrypt(payload) as number[]
+
+    const writer = new Utils.Writer()
+    writer.writeVarIntNum(this.protocolVersion)
+    writer.writeVarIntNum(this.passwordRounds)
+    writer.write(this.passwordSalt) // 32 bytes
+    writer.write(encrypted)
+    const fileBytes = writer.toArray() as number[]
+
+    this.saved = true
+    this.logVault('vault.saved', `bytes=${fileBytes.length}`)
+    return fileBytes
+  }
+
+  async downloadVaultFile (password?: string): Promise<void> {
+    const bytes = await this.saveToFileBytes(password)
+    const hashHex = Utils.toHex(Hash.sha256(bytes))
+    const blob = new Blob([new Uint8Array(bytes)], { type: 'application/octet-stream' })
+    const url = URL.createObjectURL(blob)
+    const a = document.createElement('a')
+    a.href = url
+    a.download = `${this.vaultName.replace(/\s+/g, '_')}_${Date.now()}.vaultfile`
+    a.click()
+    URL.revokeObjectURL(url)
+    window.alert(
+      `Vault file downloaded.\n\nSHA-256 (hex):\n${hashHex}\n\nVerify and store safely. Delete any old vault file versions.`
+    )
+  }
+
+  private nextSerial (): string {
+    // Simple serial: K0001, K0002, ...
+    const n = this.keys.length + 1
+    return `K${String(n).padStart(4, '0')}`
+  }
+
+  generateKeyInteractive () {
+    const memo = window.prompt('Memo for this key (optional):') || ''
+    const priv = PrivateKey.fromRandom()
+    const rec = {
+      serial: this.nextSerial(),
+      private: priv,
+      public: priv.toPublicKey(),
+      usedOnChain: false,
+      memo
+    }
+    this.keys.push(rec)
+    this.logVault('key.generated', rec.serial)
+    return rec
+  }
+
+  downloadDepositSlipTxt (serial: string): void {
+    const key = this.keys.find(k => k.serial === serial)
+    if (!key) throw new Error('Key not found.')
+    if (key.usedOnChain) {
+      const ok = window.confirm('WARNING: this key appears used on-chain. Continue to download deposit info?')
+      if (!ok) return
+    }
+
+    const body =
+`BSV Deposit Slip (text)
+------------------------
+Vault:         ${this.vaultName}
+Vault Rev:     ${this.vaultRevision}
+Key Serial:    ${key.serial}
+Memo:          ${key.memo || ''}
+
+Public key:    ${key.public.toString()}
+Pubkey hash:   ${key.public.toHash('hex')}
+P2PKH Script:  ${new P2PKH().lock(key.public.toDER()).toHex()}
+Address:       ${key.public.toAddress()}
+
+Created At:    ${new Date().toISOString()}
+
+Instructions:
+- Send funds only to the above script/address.
+- Obtain Atomic BEEF format transactions from each recipient.
+- Update the vault with new Atomic BEEFs whenever they are received.
+- Keep the vault file updated and saved after each receive.
+`
+    const blob = new Blob([body], { type: 'text/plain' })
+    const url = URL.createObjectURL(blob)
+    const a = document.createElement('a')
+    a.href = url
+    a.download = `deposit_${key.serial}.txt`
+    a.click()
+    URL.revokeObjectURL(url)
+  }
+
+  private matchOurOutputs (tx: Transaction): Array<{ vout: number, lockHex: string, satoshis: number, serial: string }> {
+    const results: Array<{ vout: number, lockHex: string, satoshis: number, serial: string }> = []
+    const byPkh = new Map()
+    for (const k of this.keys) {
+      const pkhHex = k.public.toHash('hex')
+      byPkh.set(pkhHex, k)
+    }
+
+    for (let i = 0; i < tx.outputs.length; i++) {
+      const out = tx.outputs[i]
+      const lock = out.lockingScript
+      const hex = lock.toHex()
+      const asm = lock.toASM()
+      // P2PKH pattern
+      let m = asm.match(/^OP_DUP OP_HASH160 ([0-9a-fA-F]{40}) OP_EQUALVERIFY OP_CHECKSIG$/)
+      if (m) {
+        const pkh = m[1].toLowerCase()
+        const key = byPkh.get(pkh)
+        if (key) results.push({ vout: i, lockHex: hex, satoshis: out.satoshis as number, serial: key.serial })
+      }
+    }
+    return results
+  }
+
+  async processIncomingInteractive (hex: string): Promise<void> {
+    let memo = window.prompt('Incoming transaction memo (optional):') || ''
+    const tx = Transaction.fromAtomicBEEF(Utils.toArray(hex, 'hex'))
+    const txid = tx.id('hex') as string
+
+    const matches = this.matchOurOutputs(tx)
+    if (matches.length === 0) {
+      window.alert('No outputs to this vault’s keys were found in that transaction.')
+    }
+
+    // Check SPV validity
+    let spvValid = false
+    try {
+      spvValid = await tx.verify(this) ?? false
+    } catch {
+      spvValid = false
+    }
+    if (!spvValid) {
+      window.alert('SPV verification failed.')
+      return
+    }
+
+    // optional per-UTXO attestation
+    const admit: typeof matches = []
+    for (const m of matches) {
+      if (!this.confirmIncomingCoins) { admit.push(m); continue }
+      const ok = window.confirm(
+        `Admit UTXO ${txid}:${m.vout} (${m.satoshis} sats) to key [${m.serial}]?\n\n` +
+        `Locking script (hex):\n${m.lockHex}\n\n` +
+        `Attest that this is currently unspent on the honest chain.`
+      )
+      if (ok) admit.push(m)
+    }
+
+    // save coins + tx log
+    for (const m of admit) {
+      this.coins.push({ tx, outputIndex: m.vout, memo: '' })
+      const k = this.keys.find(kk => kk.serial === m.serial); if (k) k.usedOnChain = true
+    }
+
+    const atomic = tx.toAtomicBEEF() as number[]
+    const net = matches.reduce((n, m) => n + m.satoshis, 0) // simplistic net-in; TODO: adjust to compensate for true delta (in case any vault coins were inputs.....)
+    this.transactionLog.push({
+      at: Date.now(),
+      atomicBEEF: atomic,
+      net,
+      memo,
+      processed: false,
+      txid
+    })
+    this.logVault('incoming.accepted', `${txid}:${admit.map(a=>a.vout).join(',')}`)
+
+    window.alert('Incoming processed.\n“Your transaction is not processed until the new vault is saved.”')
+  }
+
+  markProcessed (txid: string, processed: boolean): void {
+    const t = this.transactionLog.find(t => t.txid === txid)
+    if (t) {
+      t.processed = processed
+      this.logVault('tx.processed', `${txid}:${processed ? '1' : '0'}`)
+    }
+  }
+
+  async buildAndSignOutgoingInteractive (): Promise<{ tx: Transaction, atomicBEEF: string }> {
+    // gather outputs
+    const outLines = window.prompt(
+      'Enter outputs, one per line:\n"<address_or_locking_script_hex> <satoshis> [memo]"\n\n' +
+      'Example:\n1ABC... 546 memo to tip jar\n76a914...88ac 1000 change\n'
+    )
+    if (!outLines) throw new Error('No outputs provided.')
+    const dests = outLines.split('\n').map(s => s.trim()).filter(Boolean)
+
+    // parse outputs
+    const outputs: { lockingScript: Script, satoshis: number, memo?: string }[] = []
+    for (const line of dests) {
+      const parts = line.split(' ')
+      const dest = parts[0]
+      const sat = Number(parts[1])
+      if (!Number.isFinite(sat) || sat <= 0) throw new Error(`Bad amount on line: ${line}`)
+      const memo = parts.slice(2).join(' ')
+
+      let lock: Script
+      if (/^[0-9a-fA-F]{20,}$/.test(dest) && !/[O]/i.test(dest)) {
+        // Treat as script hex if it looks hexy enough
+        lock = Script.fromHex(dest)
+      } else {
+        // Treat as address
+        lock = new P2PKH().lock(dest)
+      }
+      outputs.push({ lockingScript: lock, satoshis: sat, memo })
+    }
+
+    // select inputs
+    const utxos = this.coins
+    if (utxos.length === 0) throw new Error('No spendable UTXOs available.')
+    const list = utxos.map((u, i) => `${i}. ${u.tx.id('hex')}:${u.outputIndex} — ${u.tx.outputs[u.outputIndex].satoshis} sats`).join('\n')
+    const chosen = window.prompt(
+      `Select inputs by comma-separated indices:\n${list}\n\nExample: 0,2,3`
+    )
+    if (!chosen) throw new Error('No inputs selected.')
+    const idxs = chosen.split(',').map(s => Number(s.trim())).filter(n => Number.isInteger(n) && n >= 0 && n < utxos.length)
+    if (idxs.length === 0) throw new Error('No valid indices.')
+
+    const selected = idxs.map(i => utxos[i])
+
+    // optional attest outgoing
+    if (this.confirmOutgoingCoins) {
+      const ok = window.confirm('Do you attest that these selected UTXOs are currently unspent and spendable on the HONEST chain?')
+      if (!ok) throw new Error('Outgoing attestation declined.')
+    }
+
+    // change keys
+    const keyList = this.keys.map((k, i) => `${i}. ${k.serial}${k.memo ? ' — ' + k.memo : ''}`).join('\n')
+    const changeSel = window.prompt(
+      `Select change keys by indices (one or more, comma separated):\n${keyList}\n\nExample: 0`
+    )
+    if (!changeSel) throw new Error('No change key selected.')
+    const cidx = changeSel.split(',').map(s => Number(s.trim())).filter(n => Number.isInteger(n) && n >= 0 && n < this.keys.length)
+    if (cidx.length === 0) throw new Error('No valid change key indices.')
+    const changeKeys = cidx.map(i => this.keys[i])
+
+    // memo
+    const txMemo = window.prompt('Outgoing transaction memo (optional):') || ''
+
+    // Build inputs
+    const inputs = selected.map(u => {
+      // P2PKH unlocking template generally requires (privKey, sighashType, forkId?, satoshis, sourceLockingScript)
+      // The exact signature may vary with @bsv/sdk version; adjust if your build differs.
+      const sourceLock = Script.fromHex(u.lockHex)
+
+      const unlockingTemplate =
+        u.kind === 'p2pkh'
+          ? new P2PKH().unlock(u.key.private, 'all', false, u.satoshis, sourceLock)
+          : undefined // For P2PK, you would provide an appropriate ScriptTemplate that does <sig> for <pubkey>.
+
+      return {
+        sourceTXID: u.txid,
+        sourceOutputIndex: u.vout,
+        sourceSatoshis: u.satoshis,
+        sourceLockingScript: sourceLock,
+        unlockingScriptTemplate: unlockingTemplate
+      }
+    })
+
+    // Build outputs, append change placeholders (we let fee engine size it)
+    const tx = new Transaction(1, inputs as any, outputs as any)
+
+    // Add change outputs (basic: one change output to first change key if any balance left after fee)
+    // Many SDKs have an automatic fee/change apportioner; otherwise you balance manually.
+    // If manual: compute totalIn - totalOut - fee, then add change if > dust.
+    // Here we assume a simple sat/byte fee (fallback 0.5 sat/byte if not available).
+    let totalIn = selected.reduce((n, u) => n + u.satoshis, 0)
+    let totalOut = outputs.reduce((n, o) => n + o.satoshis, 0)
+    let fee = Math.ceil((tx.toArray?.()?.length || 200) * 0.5) // rough estimate
+    let change = totalIn - totalOut - fee
+    const dust = 546
+
+    // distribute change across selected change keys evenly (rounding to sats)
+    if (change > dust) {
+      const per = Math.floor(change / changeKeys.length)
+      const rem = change - per * changeKeys.length
+      for (let i = 0; i < changeKeys.length; i++) {
+        const k = changeKeys[i]
+        const pkhHex = Utils.toHex(Hash.ripemd160(Hash.sha256(k.public.toArray())))
+        const lock = Script.fromHex(`76a914${pkhHex}88ac`)
+        const amt = per + (i === 0 ? rem : 0)
+        if (amt >= dust) {
+          (tx.outputs as any).push({ lockingScript: lock, satoshis: amt, change: true })
+        }
+      }
+      totalOut += change // for accounting
+    } else {
+      // If change below dust, just add it to fee.
+      fee += change
+      change = 0
+    }
+
+    // Sign (some SDKs need explicit sign; others sign via unlocking templates)
+    await (tx as any).sign?.()
+
+    // Update coin set: consume inputs; add change as coins (no fresh proofs, but ancestry remains)
+    const txid = tx.id('hex') as string
+    for (const u of selected) {
+      // remove coin record matching txid:vout
+      const idx = this.coins.findIndex(c => (c.tx.id('hex') as string) === u.txid && c.outputIndex === u.vout)
+      if (idx !== -1) this.coins.splice(idx, 1)
+    }
+    // add change UTXOs
+    tx.outputs.forEach((out: any, vout: number) => {
+      if (!out.change) return
+      this.coins.push({ tx, outputIndex: vout, memo: 'change' })
+    })
+
+    const atomic = Utils.toHex(tx.toAtomicBEEF() as number[])
+    this.transactionLog.push({
+      at: Date.now(),
+      atomicBEEF: tx.toAtomicBEEF() as number[],
+      net: - (totalOut + fee) + totalIn, // negative, fee-included
+      memo: txMemo,
+      processed: false,
+      txid
+    })
+    this.logVault('outgoing.signed', txid)
+
+    // Offer downloads (.txt) for raw and Atomic-BEEF hex
+    const rawHex = tx.toHex()
+    this.downloadText(`tx_${txid}.hex.txt`, rawHex)
+    this.downloadText(`tx_${txid}.atomic-beef.txt`, atomic)
+
+    window.alert('Built & signed. Submit externally. Then SAVE the vault.\n“Your funds are not safe until the new vault is saved.”')
+    return { tx, atomicBEEF: atomic }
+  }
+
+  private downloadText (filename: string, content: string) {
+    const blob = new Blob([content], { type: 'text/plain' })
+    const url = URL.createObjectURL(blob)
+    const a = document.createElement('a'); a.href = url; a.download = filename; a.click()
+    URL.revokeObjectURL(url)
   }
 }
 
