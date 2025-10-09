@@ -1,7 +1,7 @@
-import { useEffect, useMemo, useRef, useState } from 'react'
+import { useEffect, useMemo, useRef, useState, FC, ReactNode } from 'react'
 import {
   PrivateKey, P2PKH, Script, Transaction, PublicKey, ChainTracker,
-  Utils, Hash, SymmetricKey, Random, TransactionOutput, MerklePath
+  Utils, Hash, SymmetricKey, Random, TransactionOutput
 } from '@bsv/sdk'
 
 /**
@@ -10,11 +10,7 @@ import {
  * ---------------------------------------------------------------------------
  */
 
-type Hex = string
 type UnixMs = number
-
-/** Never include secrets in logs. */
-type Redacted<T> = Omit<T, 'private' | 'encryptionKeyBytes' | 'encryptionKey'>
 
 /** A serializable, sanitized session/vault event. */
 type AuditEvent = {
@@ -40,8 +36,8 @@ type CoinRecord = {
 
 type TxLogRecord = {
   at: UnixMs
-  atomicBEEF: number[]       // raw bytes; never keys
-  net: number                // positive=in, negative=out
+  atomicBEEF: number[]
+  net: number // positive=in, negative=out
   memo: string
   processed: boolean
   txid: string
@@ -62,40 +58,48 @@ type EphemeralHeaderClaim = {
 
 type OutgoingOutputSpec = {
   /** Address (Base58/BSV) OR full locking script hex */
-  dest: string
+  destinationAddressOrScript: string
   satoshis: number
   memo?: string
 }
 
-type SelectionStrategy = 'largest-first' | 'smallest-first' | 'oldest-first'
+type MatchedOutput = {
+  outputIndex: number
+  lockingScript: string
+  satoshis: number
+  serial: string
+}
+
+type IncomingPreview = {
+  tx: Transaction
+  txid: string
+  hex: string
+  matches: MatchedOutput[]
+  spvValid: boolean
+}
+
+type AutoInputSelectionStrategy = 'largest-first' | 'smallest-first' | 'oldest-first'
+
+type AttestationFn = (coin: CoinRecord) => Promise<boolean>
 
 type BuildOutgoingOptions = {
   outputs: OutgoingOutputSpec[]
-  /**
-   * Optional explicit input set (txid:vout). If omitted, the vault will
-   * auto-select using `strategy`.
-   */
   inputIds?: string[]
-  strategy?: SelectionStrategy
-  /**
-   * Change keys to use (serials). If omitted, vault will use the newest unused
-   * key or fall back to the first key.
-   */
+  strategy?: AutoInputSelectionStrategy
   changeKeySerials?: string[]
   /**
-   * If true and policy requires outgoing attestation, attest each UTXO
-   * individually (UI should surface this list clearly to the user).
+   * If true and policy requires outgoing attestation, the provided `attestationFn`
+   * will be called for each input UTXO.
    */
   perUtxoAttestation?: boolean
+  attestationFn?: AttestationFn
   txMemo?: string
 }
 
-/** Format a txid:vout pair */
-function coinId (tx: Transaction, vout: number): string {
-  return `${tx.id('hex')}:${vout}`
+/** Format a txid:outputIndex pair */
+function coinId (tx: Transaction, outputIndex: number): string {
+  return `${tx.id('hex')}:${outputIndex}`
 }
-
-function nowIso () { return new Date().toISOString() }
 
 function assert (cond: any, msg: string): asserts cond {
   if (!cond) throw new Error(msg)
@@ -103,23 +107,21 @@ function assert (cond: any, msg: string): asserts cond {
 
 /**
  * ---------------------------------------------------------------------------
- * Vault class (core, auditable, React-agnostic)
+ * Vault class
  * ---------------------------------------------------------------------------
  * - Implements ChainTracker.
  * - Holds derived encryption key (NOT the password) so we never re-prompt.
  * - Exposes non-interactive APIs for UI to drive flows without window.prompt.
- * - Keeps interactive prompts only for ChainTracker confirmation steps.
+ * - Interactive prompts for ChainTracker SPV confirmation steps.
  */
 
 class Vault implements ChainTracker {
   /** File format / policy */
   protocolVersion = 1
-  passwordRounds = 80085
+  passwordRounds = 80000
   passwordSalt: number[] = new Array(32).fill(0)
-  /** Cached symmetric key derived from user password (NOT the password) */
+  /** Cached symmetric key derived from user password (NOT the password itself) */
   private encryptionKey?: SymmetricKey
-  /** For sanity checks; never logged */
-  private encryptionKeyBytes?: number[]
 
   /** Metadata */
   vaultName = 'Vault'
@@ -131,7 +133,7 @@ class Vault implements ChainTracker {
   keys: KeyRecord[] = []
   coins: CoinRecord[] = []
 
-  /** Activity logs (sanitized; never keys) */
+  /** Activity logs (sanitized; never log keys) */
   transactionLog: TxLogRecord[] = []
   vaultLog: AuditEvent[] = []
   sessionLog: AuditEvent[] = []
@@ -169,7 +171,7 @@ class Vault implements ChainTracker {
   }
 
   // -------------------------------------------------------------------------
-  // ChainTracker (explicitly allowed to prompt/confirm)
+  // ChainTracker
   // -------------------------------------------------------------------------
   async isValidRootForHeight (root: string, height: number): Promise<boolean> {
     const persisted = this.persistedHeaderClaims.findIndex(c => c.merkleRoot === root && c.height === height)
@@ -189,10 +191,12 @@ class Vault implements ChainTracker {
     if (this.currentBlockHeight !== 0 && (this.currentBlockHeight - this.persistHeadersOlderThanBlocks) < height) {
       this.ephemeralHeaderClaims.push({ at: Date.now(), merkleRoot: root, height })
       this.logVault('chain.header.ephemeral', `h=${height} root=${root}`)
+      this.logSession('chain.header.ephemeral', `h=${height} root=${root}`)
     } else {
       let memo = window.prompt('Enter the source(s) used to confirm this merkle root:') || 'No memo provided.'
       this.persistedHeaderClaims.push({ at: Date.now(), merkleRoot: root, height, memo })
       this.logVault('chain.header.persisted', `h=${height} root=${root} memo=${memo}`)
+      this.logSession('chain.header.persisted', `h=${height} root=${root} memo=${memo}`)
     }
     return true
   }
@@ -245,12 +249,11 @@ class Vault implements ChainTracker {
     const pw = window.prompt('Set a password for this vault file (required):') || ''
     if (!pw) throw new Error('Password required to create vault.')
     const keyBytes = Hash.pbkdf2(Utils.toArray(pw), v.passwordSalt, v.passwordRounds, 32)
-    v.encryptionKeyBytes = keyBytes
     v.encryptionKey = new SymmetricKey(keyBytes)
     v.logVault('vault.key.derived', `klen=${keyBytes.length}`)
 
     // Policy toggles
-    v.confirmIncomingCoins = window.confirm('Require attestation for incoming UTXOs? (OK = yes)')
+    v.confirmIncomingCoins = window.confirm('Require attestation for incoming UTXOs? (OK = yes, Recommended)')
     v.confirmOutgoingCoins = window.confirm('Require attestation for outgoing UTXOs? (OK = yes)')
     v.logKV('vault', 'confirmIncomingCoins', String(v.confirmIncomingCoins))
     v.logKV('vault', 'confirmOutgoingCoins', String(v.confirmOutgoingCoins))
@@ -267,7 +270,6 @@ class Vault implements ChainTracker {
     v.logKV('vault', 'reverifyCurrentBlockHeightAfterSeconds', String(v.reverifyCurrentBlockHeightAfterSeconds))
 
     v.logSession('wizard.complete', 'create')
-    window.alert('Vault created. Generate at least one key to receive funds.')
     return v
   }
 
@@ -277,7 +279,7 @@ class Vault implements ChainTracker {
 
     const fileHash = Utils.toHex(Hash.sha256(file))
     v.logSession('vault.load.hash', fileHash)
-    const ok = window.confirm(`Ensure the SHA-256 of your vault file matches:\n${fileHash}`)
+    const ok = window.confirm(`Ensure the SHA-256 hash of the vault file that you stored matches:\n${fileHash}`)
     if (!ok) throw new Error('Vault file SHA-256 has not been verified.')
 
     const r = new Utils.Reader(file)
@@ -299,7 +301,6 @@ class Vault implements ChainTracker {
       const key = new SymmetricKey(kb)
       try {
         decrypted = key.decrypt(encrypted) as number[]
-        v.encryptionKeyBytes = kb
         v.encryptionKey = key
         v.logSession('vault.decrypt.ok', `payload=${decrypted.length}B`)
       } catch {
@@ -323,19 +324,22 @@ class Vault implements ChainTracker {
   /** Save using cached encryption key; never re-prompts. */
   async saveToFileBytes (): Promise<number[]> {
     assert(this.encryptionKey, 'Encryption key not initialized; create or load the vault first.')
+
+    this.vaultRevision++
+    this.lastUpdated = Date.now()
+    this.logVault('vault.saved', `rev=${this.vaultRevision}`)
+
     const payload = this.serializePlaintext()
     const encrypted = this.encryptionKey!.encrypt(payload) as number[]
 
     const writer = new Utils.Writer()
     writer.writeVarIntNum(this.protocolVersion)
     writer.writeVarIntNum(this.passwordRounds)
-    writer.write(this.passwordSalt) // 32B
+    writer.write(this.passwordSalt) // 32 bytes
     writer.write(encrypted)
 
     const bytes = writer.toArray() as number[]
     this.saved = true
-    this.lastUpdated = Date.now()
-    this.logVault('vault.saved', `bytes=${bytes.length}`)
     return bytes
   }
 
@@ -346,10 +350,12 @@ class Vault implements ChainTracker {
     const url = URL.createObjectURL(blob)
     const a = document.createElement('a')
     a.href = url
-    a.download = `${this.vaultName.replace(/\s+/g, '_')}_${Date.now()}.vaultfile`
+    a.download = `${this.vaultName.replace(/\s+/g, '_')}_rev${this.vaultRevision}_${Date.now()}.vaultfile`
     a.click()
     URL.revokeObjectURL(url)
-    window.alert(`Vault file downloaded.\n\nSHA-256 (hex):\n${hashHex}\n\nVerify and store safely. Delete any old vault versions.`)
+    const msg = `Vault file downloaded.\n\nRevision: ${this.vaultRevision}\nSHA-256 (hex):\n${hashHex}\n\nVerify and store this new file safely. Securely delete any old vault versions.`
+    // Use alert here as it's a critical final confirmation
+    alert(msg)
   }
 
   // -------------------------------------------------------------------------
@@ -522,7 +528,6 @@ class Vault implements ChainTracker {
     return rec
   }
 
-  /** Download a public-only “deposit slip” for a given key. */
   downloadDepositSlipTxt (serial: string): void {
     const key = this.keys.find(k => k.serial === serial)
     if (!key) throw new Error('Key not found.')
@@ -558,8 +563,8 @@ Instructions:
     URL.revokeObjectURL(url)
   }
 
-  private matchOurOutputs (tx: Transaction): Array<{ vout: number, lockHex: string, satoshis: number, serial: string }> {
-    const results: Array<{ vout: number, lockHex: string, satoshis: number, serial: string }> = []
+  private matchOurOutputs (tx: Transaction): MatchedOutput[] {
+    const results: MatchedOutput[] = []
     const byPkh = new Map<string, KeyRecord>()
     for (const k of this.keys) byPkh.set(k.public.toHash('hex'), k)
 
@@ -571,49 +576,51 @@ Instructions:
       if (m) {
         const pkh = m[1].toLowerCase()
         const key = byPkh.get(pkh)
-        if (key) results.push({ vout: i, lockHex: lock.toHex(), satoshis: out.satoshis as number, serial: key.serial })
+        if (key) results.push({ outputIndex: i, lockingScript: lock.toHex(), satoshis: out.satoshis as number, serial: key.serial })
       }
     }
     return results
   }
 
-  /**
-   * Process an incoming Atomic BEEF (no prompts). UI passes memos/accept flags.
-   */
-  async processIncoming (hex: string, opts?: {
-    txMemo?: string
-    /** If confirmIncomingCoins=true, per-UTXO acceptance flags keyed by vout */
-    admit?: Record<number, boolean>
-    /** Optional per-UTXO memos keyed by vout */
-    perUtxoMemo?: Record<number, string>
-  }): Promise<{ admitted: string[]; txid: string }> {
+  async previewIncoming (hex: string): Promise<IncomingPreview> {
     const tx = Transaction.fromAtomicBEEF(Utils.toArray(hex, 'hex'))
     const txid = tx.id('hex') as string
     const matches = this.matchOurOutputs(tx)
-
     if (matches.length === 0) {
-      this.logSession('incoming.no-match', txid)
+      this.logSession('incoming.preview.no-match', txid)
       throw new Error('No outputs to this vault’s keys were found in that transaction.')
     }
-
-    // SPV check
     let spvValid = false
     try { spvValid = await tx.verify(this) ?? false } catch { spvValid = false }
     if (!spvValid) {
-      this.logSession('incoming.spv.fail', txid)
-      throw new Error('SPV verification failed.')
+      this.logSession('incoming.preview.spv.fail', txid)
+      throw new Error('SPV verification failed. The transaction may be invalid or unconfirmed on the honest chain.')
+    }
+    this.logSession('incoming.preview.ok', txid)
+    return { tx, txid, hex, matches, spvValid }
+  }
+
+  async processIncoming (tx: Transaction, opts: {
+    txMemo?: string
+    admit: Record<number, boolean>
+    perUtxoMemo: Record<number, string>
+  }): Promise<{ admitted: string[]; txid: string }> {
+    const txid = tx.id('hex') as string
+    const allMatches = this.matchOurOutputs(tx)
+
+    const admitted: typeof allMatches = []
+    for (const m of allMatches) {
+      const ok = opts.admit[m.outputIndex] === true
+      if (ok) admitted.push(m)
     }
 
-    const admitted: typeof matches = []
-    for (const m of matches) {
-      if (!this.confirmIncomingCoins) { admitted.push(m); continue }
-      const ok = opts?.admit?.[m.vout] === true
-      if (ok) admitted.push(m)
+    if (admitted.length === 0) {
+        throw new Error('No outputs were selected to be admitted into the vault.')
     }
 
     // Update coin set & mark key usage
     for (const m of admitted) {
-      this.coins.push({ tx, outputIndex: m.vout, memo: opts?.perUtxoMemo?.[m.vout] || '', keySerial: m.serial })
+      this.coins.push({ tx, outputIndex: m.outputIndex, memo: opts.perUtxoMemo?.[m.outputIndex] || '', keySerial: m.serial })
       const k = this.keys.find(kk => kk.serial === m.serial); if (k) k.usedOnChain = true
     }
 
@@ -622,8 +629,8 @@ Instructions:
     this.transactionLog.push({
       at: Date.now(), atomicBEEF: atomic, net: netIn, memo: opts?.txMemo || '', processed: false, txid
     })
-    this.logVault('incoming.accepted', `${txid}:${admitted.map(a => a.vout).join(',')}`)
-    return { admitted: admitted.map(a => `${txid}:${a.vout}`), txid }
+    this.logVault('incoming.accepted', `${txid}:${admitted.map(a => a.outputIndex).join(',')}`)
+    return { admitted: admitted.map(a => `${txid}:${a.outputIndex}`), txid }
   }
 
   markProcessed (txid: string, processed: boolean): void {
@@ -638,7 +645,7 @@ Instructions:
   // Outgoing builder (no prompts). UI drives stipulation and selection.
   // -------------------------------------------------------------------------
   private parseOutputSpec (spec: OutgoingOutputSpec): { lockingScript: Script, satoshis: number, memo?: string } {
-    const { dest, satoshis, memo } = spec
+    const { destinationAddressOrScript: dest, satoshis, memo } = spec
     assert(Number.isFinite(satoshis) && satoshis > 0, `Bad amount: ${satoshis}`)
     let lock: Script
     if (/^[0-9a-fA-F]{20,}$/.test(dest) && !/[O]/i.test(dest)) {
@@ -649,17 +656,8 @@ Instructions:
     return { lockingScript: lock, satoshis, memo }
   }
 
-  private sumInputs (coins: CoinRecord[]): number {
-    return coins.reduce((n, c) => n + (c.tx.outputs[c.outputIndex].satoshis as number), 0)
-  }
-
-  private sumExternalOutputs (tx: Transaction): number {
-    // External outputs are those NOT marked as change
-    return tx.outputs.reduce((n, o) => n + (!o.change ? (o.satoshis as number) : 0), 0)
-  }
-
   /** Deterministic, safe coin selection. */
-  private selectInputs (need: number, strategy: SelectionStrategy, candidates: CoinRecord[]): CoinRecord[] {
+  private selectInputs (need: number, strategy: AutoInputSelectionStrategy, candidates: CoinRecord[]): CoinRecord[] {
     const coins = [...candidates]
     if (strategy === 'largest-first') coins.sort((a, b) =>
       (b.tx.outputs[b.outputIndex].satoshis as number) - (a.tx.outputs[a.outputIndex].satoshis as number))
@@ -679,10 +677,6 @@ Instructions:
     return sel
   }
 
-  /**
-   * Build & sign an outgoing tx (no prompts).
-   * Ensures funding by iteratively estimating fees and selecting additional UTXOs if required.
-   */
   async buildAndSignOutgoing (opts: BuildOutgoingOptions): Promise<{ tx: Transaction, atomicBEEFHex: string, usedInputIds: string[], changeIds: string[] }> {
     assert(this.coins.length > 0, 'No spendable UTXOs.')
     const outputs = opts.outputs.map(o => this.parseOutputSpec(o))
@@ -697,13 +691,11 @@ Instructions:
         return k
       })
     } else {
-      // default: newest unused key or first key
-      const unused = [...this.keys].filter(k => !k.usedOnChain)
+      const unused = [...this.keys].filter(k => !k.usedOnChain).sort((a, b) => a.serial.localeCompare(b.serial))
       changeKeys = unused.length ? [unused[unused.length - 1]] : (this.keys.length ? [this.keys[0]] : [])
       if (changeKeys.length === 0) throw new Error('No keys available for change.')
     }
 
-    // Candidate inputs (either explicit or from vault)
     let selected: CoinRecord[] = []
     if (opts.inputIds && opts.inputIds.length > 0) {
       const byId = new Map(this.coins.map(c => [coinId(c.tx, c.outputIndex), c] as const))
@@ -713,21 +705,17 @@ Instructions:
     }
 
     const strategy = opts.strategy || 'largest-first'
-    const available = this.coins.filter(c => !selected.includes(c))
+    const available = this.coins.filter(c => !selected.some(s => coinId(s.tx, s.outputIndex) === coinId(c.tx, c.outputIndex)))
 
-    // Iteratively build until funded
     const tx = new Transaction()
-    // Add external outputs
     for (const o of outputs) tx.addOutput(o)
 
-    // Always include at least one change output candidate
     const idxToKeySerial = new Map<number, string>()
     for (const k of changeKeys) {
       tx.addOutput({ lockingScript: new P2PKH().lock(k.public.toAddress()), change: true })
       idxToKeySerial.set(tx.outputs.length - 1, k.serial)
     }
 
-    // Seed with any user-provided inputs
     for (const s of selected) {
       tx.addInput({
         sourceTransaction: s.tx,
@@ -736,51 +724,25 @@ Instructions:
       })
     }
 
-    // Estimate & ensure coverage
-    const ensureCoverage = () => {
-      // Call fee estimator (the sdk mutates change values)
-      tx.fee() // deterministic by sdk rules
-      const inputSum = tx.inputs.reduce((n, i) => n + (i.sourceTransaction!.outputs[i.sourceOutputIndex!].satoshis as number), 0)
-      const outputSum = tx.outputs.reduce((n, o) => n + (o.satoshis as number), 0)
-      const delta = inputSum - outputSum
-      return { funded: delta >= 0, deficit: Math.max(0, -delta) }
-    }
+    debugger
 
-    let { funded, deficit } = ensureCoverage()
-    while (!funded) {
-      // pick more inputs
-      const need = deficit
-      const add = this.selectInputs(need, strategy, available.filter(c => !selected.includes(c)))
-      for (const s of add) {
-        tx.addInput({
-          sourceTransaction: s.tx,
-          sourceOutputIndex: s.outputIndex,
-          unlockingScriptTemplate: new P2PKH().unlock(this.keys.find(x => x.serial === s.keySerial)!.private)
-        })
-        selected.push(s)
-      }
-      const r = ensureCoverage(); funded = r.funded; deficit = r.deficit
-    }
+    // Fee to miners, change to change outputs
+    tx.fee() // TODO: support custom fees and fee models
 
-    // Optional outgoing attestation
-    if (this.confirmOutgoingCoins && opts.perUtxoAttestation) {
+    // Optional outgoing attestation handled by UI via callback
+    if (this.confirmOutgoingCoins && opts.perUtxoAttestation && opts.attestationFn) {
       for (const s of selected) {
-        const id = coinId(s.tx, s.outputIndex)
-        const ok = window.confirm(`Attest UTXO is unspent on HONEST chain: ${id}\nAmount: ${s.tx.outputs[s.outputIndex].satoshis} sats`)
-        if (!ok) throw new Error(`Outgoing attestation declined for ${id}.`)
+        const ok = await opts.attestationFn(s)
+        if (!ok) throw new Error(`Outgoing attestation declined for ${coinId(s.tx, s.outputIndex)}.`)
       }
     }
 
     tx.sign()
 
-    // Update coin set atomically: consume inputs, add change
     const txid = tx.id('hex') as string
     const selectedIds = new Set(selected.map(s => coinId(s.tx, s.outputIndex)))
-
-    // remove spent
     this.coins = this.coins.filter(c => !selectedIds.has(coinId(c.tx, c.outputIndex)))
 
-    // add change
     const changeIds: string[] = []
     tx.outputs.forEach((out: TransactionOutput, outputIndex: number) => {
       if (!out.change) return
@@ -789,21 +751,15 @@ Instructions:
       changeIds.push(`${txid}:${outputIndex}`)
     })
 
-    // Accurate net delta: (sum of inputs we own) - (sum of change back to us) - (fees) - (external outputs)
-    const totalInputs = selected.reduce((a, e) => a + (e.tx.outputs[e.outputIndex].satoshis! as number), 0)
+    const totalInputs = selected.reduce((a, e) => a + (e.tx.outputs[e.outputIndex].satoshis!), 0)
     const changeBack = tx.outputs.reduce((a, o) => a + (o.change ? (o.satoshis as number) : 0), 0)
-    const external = this.sumExternalOutputs(tx)
+    const external = tx.outputs.reduce((a, o) => a + (!o.change ? (o.satoshis as number) : 0), 0)
     const fee = totalInputs - (changeBack + external)
-    const net = -(external + fee) // negative outflow
+    const net = -(external + fee)
 
     const atomic = Utils.toHex(tx.toAtomicBEEF() as number[])
     this.transactionLog.push({
-      at: Date.now(),
-      atomicBEEF: tx.toAtomicBEEF() as number[],
-      net,
-      memo: opts.txMemo || '',
-      processed: false,
-      txid
+      at: Date.now(), atomicBEEF: tx.toAtomicBEEF() as number[], net, memo: opts.txMemo || '', processed: false, txid
     })
 
     this.logVault('outgoing.signed', `txid=${txid} inputs=${selected.length} change=${changeIds.length} fee=${fee}`)
@@ -815,13 +771,15 @@ Instructions:
   // -------------------------------------------------------------------------
   exportSessionLog (): void {
     const redacted: AuditEvent[] = this.sessionLog.map(e => ({ at: e.at, event: e.event, data: e.data }))
-    const blob = new Blob([JSON.stringify({
-      vault: { name: this.vaultName, rev: this.vaultRevision },
-      createdAt: this.created, lastUpdated: this.lastUpdated,
-      sessionLog: redacted, vaultLog: this.vaultLog
-    }, null, 2)], { type: 'application/json' })
+    const blob = new Blob([`
+Vault: ${this.vaultName}, rev: ${this.vaultRevision}
+Created: ${this.created}, Updated: ${this.lastUpdated}
+Session Log:
+-----
+${redacted.map(x => `[${x.at}]: ${x.event}, ${x.data}`)}
+`], { type: 'text/plain' })
     const url = URL.createObjectURL(blob)
-    const a = document.createElement('a'); a.href = url; a.download = `vault_session_${Date.now()}.json`; a.click()
+    const a = document.createElement('a'); a.href = url; a.download = `vault_session_${Date.now()}.txt`; a.click()
     URL.revokeObjectURL(url)
   }
 }
@@ -832,108 +790,126 @@ Instructions:
  * ---------------------------------------------------------------------------
  */
 
+type Notification = { type: 'success' | 'error' | 'info', message: string, id: number }
+
+const NotificationBanner: FC<{ notification: Notification, onDismiss: () => void }> = ({ notification, onDismiss }) => {
+  const colors = { success: '#4CAF50', error: '#8b0000', info: '#2196F3' }
+  useEffect(() => {
+    const timer = setTimeout(onDismiss, 5000)
+    return () => clearTimeout(timer)
+  }, [notification.id, onDismiss])
+
+  return (
+    <div style={{
+      position: 'fixed', top: 16, right: 16, background: colors[notification.type], color: 'white',
+      padding: '12px 16px', borderRadius: 4, zIndex: 1000, boxShadow: '0 2px 10px rgba(0,0,0,0.2)',
+      display: 'flex', alignItems: 'center', gap: 16
+    }}>
+      <span>{notification.message}</span>
+      <button onClick={onDismiss} style={{ background: 'none', border: 'none', color: 'white', fontSize: 16, cursor: 'pointer' }}>&times;</button>
+    </div>
+  )
+}
+
+const Modal: FC<{ title: string, children: ReactNode, onClose: () => void }> = ({ title, children, onClose }) => {
+  return (
+    <div style={{
+      position: 'fixed', top: 0, left: 0, right: 0, bottom: 0, background: 'rgba(0,0,0,0.5)',
+      display: 'flex', alignItems: 'center', justifyContent: 'center', zIndex: 999
+    }}>
+      <div style={{ background: 'white', padding: 20, borderRadius: 5, minWidth: 500, maxWidth: '90%' }}>
+        <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', borderBottom: '1px solid #ddd', paddingBottom: 10, marginBottom: 15 }}>
+          <h2>{title}</h2>
+          <button onClick={onClose} style={{ background: 'none', border: 'none', fontSize: 24, cursor: 'pointer' }}>&times;</button>
+        </div>
+        {children}
+      </div>
+    </div>
+  )
+}
+
 export default function App () {
   const [vault, setVault] = useState<Vault | null>(null)
   const [lastSavedPlainHash, setLastSavedPlainHash] = useState<string | null>(null)
-  const [banner, setBanner] = useState<string | null>(null)
+  const [notification, setNotification] = useState<Notification | null>(null)
+  const [incomingPreview, setIncomingPreview] = useState<IncomingPreview | null>(null)
+  const [isLoading, setIsLoading] = useState(false)
 
-  // Outgoing builder state
-  const [outLines, setOutLines] = useState<string>('') // "<addr_or_hex> <sats> [memo]" per line
-  const [manualInputs, setManualInputs] = useState<Record<string, boolean>>({})
-  const [changeSerials, setChangeSerials] = useState<Record<string, boolean>>({})
-  const [txMemo, setTxMemo] = useState<string>('')
-  const [selectionStrategy, setSelectionStrategy] = useState<SelectionStrategy>('largest-first')
-  const [requirePerUtxoAttestation, setRequirePerUtxoAttestation] = useState<boolean>(false)
+  function notify(type: Notification['type'], message: string) {
+    setNotification({ type, message, id: Date.now() })
+  }
 
+  // --- Core Vault Actions ---
+  
   async function onOpenVault (file: File) {
-    const buf = new Uint8Array(await file.arrayBuffer())
-    const v = Vault.loadFromFile(Array.from(buf))
-    setVault(v)
-    setLastSavedPlainHash(v.computePlaintextHashHex())
+    setIsLoading(true);
+    try {
+      const buf = new Uint8Array(await file.arrayBuffer())
+      const v = Vault.loadFromFile(Array.from(buf))
+      setVault(v)
+      setLastSavedPlainHash(v.computePlaintextHashHex())
+      notify('success', 'Vault loaded successfully.')
+    } catch (e: any) {
+      notify('error', e.message || 'Failed to load vault.')
+    } finally {
+      setIsLoading(false)
+    }
   }
 
   async function onNewVault () {
-    const v = await Vault.create()
-    setVault(v)
-    setLastSavedPlainHash(v.computePlaintextHashHex())
+    setIsLoading(true);
+    try {
+      const v = await Vault.create()
+      setVault(v)
+      setLastSavedPlainHash(v.computePlaintextHashHex())
+      notify('info', 'New vault created. Generate a key to begin.')
+    } catch (e: any) {
+      notify('error', e.message || 'Failed to create vault.')
+    } finally {
+      setIsLoading(false)
+    }
   }
 
   async function onSaveVault () {
     if (!vault) return
-    await vault.downloadVaultFile()
-    setLastSavedPlainHash(vault.computePlaintextHashHex())
-  }
-
-  // Deterministic “dirty” check – no encryption, no prompts
-  useEffect(() => {
-    if (!vault) { setBanner(null); return }
+    setIsLoading(true);
     try {
-      const hh = vault.computePlaintextHashHex()
-      const dirty = !lastSavedPlainHash || (hh !== lastSavedPlainHash)
-      setBanner(dirty ? 'UNSAVED CHANGES — save new vault file, verify it, then delete the old one.' : null)
-    } catch {
-      // ignore
+      await vault.downloadVaultFile()
+      setLastSavedPlainHash(vault.computePlaintextHashHex())
+      triggerRerender() // To update revision number in UI
+    } catch (e: any) {
+      notify('error', e.message || 'Failed to save vault.')
+    } finally {
+      setIsLoading(false)
     }
+  }
+  
+  // A clean way to trigger a re-render after mutating the vault instance.
+  function triggerRerender () {
+    if (!vault) return
+    setVault(Object.assign(Object.create(Object.getPrototypeOf(vault)), vault))
+  }
+  
+  // --- Derived State & Components ---
+
+  const dirty = useMemo(() => {
+    if (!vault || !lastSavedPlainHash) return false
+    return vault.computePlaintextHashHex() !== lastSavedPlainHash
   }, [vault, lastSavedPlainHash])
 
   const balance = useMemo(() => {
     if (!vault) return 0
     return vault.coins.reduce((n, c) => n + (c.tx.outputs[c.outputIndex].satoshis as number), 0)
-  }, [vault])
+  }, [vault?.coins])
 
-  function refresh (mut?: (v: Vault) => void) {
-    if (!vault) return
-    if (mut) mut(vault)
-    setVault(Object.assign(Object.create(Object.getPrototypeOf(vault)), vault))
-  }
-
-  // Helpers to parse the outgoing text area
-  function parseOutgoingLines (): OutgoingOutputSpec[] {
-    const lines = outLines.split('\n').map(s => s.trim()).filter(Boolean)
-    return lines.map(line => {
-      const parts = line.split(' ')
-      const dest = parts[0]
-      const sat = Number(parts[1])
-      if (!Number.isFinite(sat) || sat <= 0) throw new Error(`Bad amount on line: ${line}`)
-      const memo = parts.slice(2).join(' ')
-      return { dest, satoshis: sat, memo }
-    })
-  }
-
-  async function buildAndSign () {
-    if (!vault) return
-    try {
-      const outputs = parseOutgoingLines()
-      const selectedIds = Object.entries(manualInputs).filter(([_, on]) => on).map(([id]) => id)
-      const change = Object.entries(changeSerials).filter(([_, on]) => on).map(([s]) => s)
-      const { tx, atomicBEEFHex, usedInputIds, changeIds } = await vault.buildAndSignOutgoing({
-        outputs,
-        inputIds: selectedIds.length ? selectedIds : undefined,
-        strategy: selectionStrategy,
-        changeKeySerials: change.length ? change : undefined,
-        perUtxoAttestation: requirePerUtxoAttestation,
-        txMemo
-      })
-
-      // Offer Atomic-BEEF as .txt
-      const blob = new Blob([atomicBEEFHex], { type: 'text/plain' })
-      const url = URL.createObjectURL(blob)
-      const a = document.createElement('a'); a.href = url; a.download = `tx_${tx.id('hex')}.atomic-beef.txt`; a.click()
-      URL.revokeObjectURL(url)
-
-      setOutLines('')
-      setManualInputs({})
-      setTxMemo('')
-      refresh()
-      alert('Built & signed. Submit externally, then SAVE the vault.')
-    } catch (e: any) {
-      alert(e.message || String(e))
-    }
+  if (isLoading) {
+    return <div style={{ fontFamily: 'Inter, system-ui, sans-serif', padding: 32, textAlign: 'center' }}>Loading Vault...</div>
   }
 
   if (!vault) {
     return (
       <div style={{ fontFamily: 'Inter, system-ui, sans-serif', padding: 16, maxWidth: 1100, margin: '0 auto' }}>
+        {notification && <NotificationBanner notification={notification} onDismiss={() => setNotification(null)} />}
         <h1>BSV Vault Manager Suite</h1>
         <section style={{ border: '1px solid #ddd', padding: 12, marginBottom: 16 }}>
           <h2>Open / New</h2>
@@ -947,174 +923,317 @@ export default function App () {
     )
   }
 
-  const utxoList = vault.coins.map(c => ({
-    id: `${c.tx.id('hex')}:${c.outputIndex}`,
-    sats: c.tx.outputs[c.outputIndex].satoshis as number,
-    asm: c.tx.outputs[c.outputIndex].lockingScript.toASM(),
-    memo: c.memo
-  }))
+  // --- Main Vault Dashboard ---
 
   return (
     <div style={{ fontFamily: 'Inter, system-ui, sans-serif', padding: 16, maxWidth: 1100, margin: '0 auto' }}>
+      {notification && <NotificationBanner notification={notification} onDismiss={() => setNotification(null)} />}
+      
+      {incomingPreview && (
+        <ProcessIncomingModal
+          vault={vault}
+          preview={incomingPreview}
+          onClose={() => setIncomingPreview(null)}
+          onSuccess={(txid) => {
+            setIncomingPreview(null)
+            triggerRerender()
+            notify('success', `Transaction ${txid} processed. SAVE the vault to persist changes.`)
+          }}
+          onError={(err) => notify('error', err)}
+        />
+      )}
+
       <h1>BSV Vault Manager Suite</h1>
 
-      {banner && (
+      {dirty && (
         <div style={{ background: '#8b0000', color: 'white', padding: 12, marginBottom: 12, fontWeight: 700 }}>
-          {banner}
+          UNSAVED CHANGES — Save the new vault file, verify its integrity, and then securely delete the old version.
         </div>
       )}
 
-      <section style={{ border: '1px solid #ddd', padding: 12, marginBottom: 16 }}>
-        <h2>Open / Save / Logs</h2>
+      <header style={{ border: '1px solid #ddd', padding: 12, marginBottom: 16 }}>
+        <h2>Vault: <b>{vault.vaultName}</b> (rev {vault.vaultRevision})</h2>
         <div style={{ display: 'flex', gap: 12, alignItems: 'center', flexWrap: 'wrap' }}>
           <input type="file" accept=".vaultfile,application/octet-stream" onChange={e => e.target.files && onOpenVault(e.target.files[0])} />
           <button onClick={onSaveVault}>Save Vault</button>
-          <button onClick={() => { vault.exportSessionLog() }}>Export Session Log (.json)</button>
-          <div>Vault: <b>{vault.vaultName}</b> (rev {vault.vaultRevision})</div>
+          <button onClick={() => { vault.exportSessionLog() }}>Export Session Log</button>
         </div>
-      </section>
+      </header>
 
+      <KeyManager vault={vault} onUpdate={triggerRerender} />
+      <IncomingManager vault={vault} onPreview={setIncomingPreview} onError={(e) => notify('error', e)} />
+      <OutgoingBuilder vault={vault} onUpdate={triggerRerender} notify={notify} />
+      
       <section style={{ border: '1px solid #ddd', padding: 12, marginBottom: 16 }}>
-        <h2>Keys</h2>
-        <div style={{ display: 'flex', gap: 12 }}>
-          <button onClick={() => { const memo = prompt('Memo for this key (optional):') || ''; vault.generateKey(memo); refresh() }}>Generate Key</button>
-        </div>
-        <div style={{ marginTop: 12 }}>
-          {vault.keys.map(k => (
-            <div key={k.serial} style={{ borderTop: '1px solid #eee', padding: '8px 0' }}>
-              <div><b>{k.serial}</b> {k.memo && `— ${k.memo}`} {k.usedOnChain ? <span style={{ color: '#b36' }}> (used)</span> : null}</div>
-              <div style={{ display: 'flex', gap: 8 }}>
-                <button onClick={() => vault.downloadDepositSlipTxt(k.serial)}>Download deposit slip (.txt)</button>
-                <span style={{ fontSize: 12, color: '#666' }}>PKH {k.public.toHash('hex')}</span>
-              </div>
-            </div>
-          ))}
-        </div>
-      </section>
-
-      <section style={{ border: '1px solid #ddd', padding: 12, marginBottom: 16 }}>
-        <h2>Process Incoming Atomic BEEF</h2>
-        <textarea placeholder="Paste Atomic BEEF hex..." rows={4} style={{ width: '100%' }} id="incoming-hex" />
-        <div style={{ marginTop: 8, display: 'flex', gap: 8, alignItems: 'center' }}>
-          <button onClick={async () => {
-            const ta = document.getElementById('incoming-hex') as HTMLTextAreaElement
-            const txMemo = prompt('Incoming tx memo (optional):') || ''
-            // For attestation-per-UTXO, surface a small UI if needed. Here we admit all if policy disabled.
-            try {
-              const res = await vault.processIncoming(ta.value, { txMemo, admit: {}, perUtxoMemo: {} })
-              ta.value = ''
-              refresh()
-              alert(`Incoming processed:\n${res.txid}\n“Your transaction is not processed until the new vault is saved.”`)
-            } catch (e: any) {
-              alert(e.message || String(e))
-            }
-          }}>Process</button>
-          <div style={{ fontSize: 12 }}><i>“Your transaction is not processed until the new vault is saved.”</i></div>
-        </div>
-      </section>
-
-      <section style={{ border: '1px solid #ddd', padding: 12, marginBottom: 16 }}>
-        <h2>Build Outgoing</h2>
-
-        <div style={{ marginBottom: 8, color: '#555', fontSize: 12 }}>
-          Enter outputs, one per line:<br />
-          <code>&lt;address_or_locking_script_hex&gt; &lt;satoshis&gt; [memo]</code>
-        </div>
-        <textarea rows={4} style={{ width: '100%' }} value={outLines} onChange={e => setOutLines(e.target.value)} placeholder={`1ABC... 546 tip\n76a914...88ac 1000 change`} />
-
-        <div style={{ marginTop: 8, display: 'flex', gap: 12, flexWrap: 'wrap', alignItems: 'center' }}>
-          <label>Selection strategy:&nbsp;
-            <select value={selectionStrategy} onChange={e => setSelectionStrategy(e.target.value as SelectionStrategy)}>
-              <option value="largest-first">largest-first</option>
-              <option value="smallest-first">smallest-first</option>
-              <option value="oldest-first">oldest-first</option>
-            </select>
-          </label>
-          <label><input type="checkbox" checked={requirePerUtxoAttestation} onChange={e => setRequirePerUtxoAttestation(e.target.checked)} /> Require per-UTXO attestation</label>
-          <input placeholder="Outgoing memo (optional)" value={txMemo} onChange={e => setTxMemo(e.target.value)} />
-        </div>
-
-        <div style={{ marginTop: 12 }}>
-          <b>Manual Input Selection (optional)</b>
-          {utxoList.length === 0 && <div>No spendable UTXOs</div>}
-          {utxoList.map(u => (
-            <div key={u.id} style={{ borderTop: '1px solid #eee', padding: '6px 0', display: 'flex', alignItems: 'center', gap: 8 }}>
-              <label>
-                <input
-                  type="checkbox"
-                  checked={!!manualInputs[u.id]}
-                  onChange={e => setManualInputs(prev => ({ ...prev, [u.id]: e.target.checked }))}
-                /> {u.id} — {u.sats} sats — {u.asm.replace(/\s+/g, ' ')}
-              </label>
-              {u.memo && <span style={{ fontSize: 12, color: '#666' }}>Memo: {u.memo}</span>}
-            </div>
-          ))}
-        </div>
-
-        <div style={{ marginTop: 12 }}>
-          <b>Change Keys</b>
-          {vault.keys.map(k => (
-            <div key={k.serial} style={{ borderTop: '1px solid #eee', padding: '6px 0' }}>
-              <label>
-                <input
-                  type="checkbox"
-                  checked={!!changeSerials[k.serial]}
-                  onChange={e => setChangeSerials(prev => ({ ...prev, [k.serial]: e.target.checked }))}
-                /> {k.serial} {k.memo && `— ${k.memo}`} {k.usedOnChain ? <span style={{ color: '#b36' }}> (used)</span> : null}
-              </label>
-            </div>
-          ))}
-        </div>
-
-        <div style={{ marginTop: 12 }}>
-          <button onClick={buildAndSign}>Finalize &amp; Sign</button>
-        </div>
-
-        <div style={{ marginTop: 8, color: '#555', fontSize: 12 }}>
-          After signing: UTXOs are updated (inputs consumed; change added), TX stored, Atomic BEEF offered as .txt. Then <b>save the new vault</b>.
-        </div>
-      </section>
-
-      <section style={{ border: '1px solid #ddd', padding: 12, marginBottom: 16 }}>
-        <h2>Transactions</h2>
-        <div>Total balance: <b>{balance}</b> sats</div>
-        <div style={{ marginTop: 8 }}>
-          {vault.transactionLog.map(t => (
-            <div key={t.txid} style={{ borderTop: '1px solid #eee', padding: '8px 0' }}>
-              <div><b>{t.txid}</b></div>
-              {t.memo && <div>Memo: {t.memo}</div>}
-              <div style={{ fontSize: 12, color: '#666' }}>
-                Net: {t.net} sats {t.net >= 0 ? '(incoming)' : '(outgoing)'}
-              </div>
-              <div style={{ marginTop: 6 }}>
+        <h2>Dashboard</h2>
+        <div>Total balance: <b>{balance.toLocaleString()}</b> sats</div>
+        <div style={{ display: 'flex', gap: 24, marginTop: 16 }}>
+          <div style={{ flex: 1 }}>
+            <h3>Current UTXOs ({vault.coins.length})</h3>
+            {vault.coins.length === 0 && <div>No spendable coins</div>}
+            {vault.coins.map(c => {
+              const out = c.tx.outputs[c.outputIndex]
+              const id = `${c.tx.id('hex')}:${c.outputIndex}`
+              return (
+                <div key={id} style={{ borderTop: '1px solid #eee', padding: '8px 0', fontSize: '12px' }}>
+                  <div><b>{id}</b> — {out.satoshis?.toLocaleString()} sats</div>
+                  {c.memo && <div>Memo: {c.memo}</div>}
+                </div>
+              )
+            })}
+          </div>
+          <div style={{ flex: 1 }}>
+            <h3>Transaction Log ({vault.transactionLog.length})</h3>
+            {[...vault.transactionLog].reverse().map(t => (
+              <div key={t.txid} style={{ borderTop: '1px solid #eee', padding: '8px 0', fontSize: '12px' }}>
+                <div><b>{t.txid}</b></div>
+                {t.memo && <div>Memo: {t.memo}</div>}
+                <div style={{ color: t.net >= 0 ? 'green' : 'red' }}>
+                  Net: {t.net.toLocaleString()} sats
+                </div>
                 <label>
-                  <input
-                    type="checkbox"
-                    checked={t.processed}
-                    onChange={e => { vault.markProcessed(t.txid, e.target.checked); refresh() }}
-                  /> Mark processed
+                  <input type="checkbox" checked={t.processed} onChange={e => { vault.markProcessed(t.txid, e.target.checked); triggerRerender() }} />
+                   Mark processed
                 </label>
               </div>
-            </div>
-          ))}
+            ))}
+          </div>
         </div>
       </section>
 
-      <section style={{ border: '1px solid #ddd', padding: 12, marginBottom: 16 }}>
-        <h2>Current UTXOs</h2>
-        {vault.coins.length === 0 && <div>No spendable coins</div>}
-        {vault.coins.map(c => {
-          const out = c.tx.outputs[c.outputIndex]
-          const id = `${c.tx.id('hex')}:${c.outputIndex}`
-          const asm = out.lockingScript.toASM()
-          return (
-            <div key={id} style={{ borderTop: '1px solid #eee', padding: '8px 0' }}>
-              <div><b>{id}</b> — {out.satoshis} sats — {asm.replace(/\s+/g, ' ')}</div>
-              {c.memo && <div>Memo: {c.memo}</div>}
-            </div>
-          )
-        })}
-      </section>
     </div>
+  )
+}
+
+// --- UI Sub-components ---
+
+const KeyManager: FC<{ vault: Vault, onUpdate: () => void }> = ({ vault, onUpdate }) => {
+  return (
+    <section style={{ border: '1px solid #ddd', padding: 12, marginBottom: 16 }}>
+      <h2>Keys ({vault.keys.length})</h2>
+      <button onClick={() => { const memo = prompt('Memo for this key (optional):') || ''; vault.generateKey(memo); onUpdate() }}>Generate New Key</button>
+      <div style={{ marginTop: 12 }}>
+        {[...vault.keys].reverse().map(k => (
+          <div key={k.serial} style={{ borderTop: '1px solid #eee', padding: '8px 0', display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+            <div>
+              <b>{k.serial}</b> {k.memo && `— ${k.memo}`} {k.usedOnChain ? <span style={{ color: '#b36' }}> (used)</span> : <span style={{color: 'green'}}>(unused)</span>}
+              <div style={{ fontSize: 12, color: '#666', fontFamily: 'monospace' }}>{k.public.toAddress()}</div>
+            </div>
+            <button onClick={() => vault.downloadDepositSlipTxt(k.serial)}>Deposit Slip (.txt)</button>
+          </div>
+        ))}
+      </div>
+    </section>
+  )
+}
+
+const IncomingManager: FC<{ vault: Vault, onPreview: (p: IncomingPreview) => void, onError: (msg: string) => void }> = ({ vault, onPreview, onError }) => {
+  const [hex, setHex] = useState('')
+  const [isProcessing, setIsProcessing] = useState(false)
+
+  async function handlePreview() {
+    if (!hex.trim()) { onError('BEEF hex cannot be empty.'); return }
+    setIsProcessing(true)
+    try {
+      const previewData = await vault.previewIncoming(hex)
+      onPreview(previewData)
+    } catch(e: any) {
+      onError(e.message || 'Failed to process BEEF.')
+    } finally {
+      setIsProcessing(false)
+    }
+  }
+
+  return (
+    <section style={{ border: '1px solid #ddd', padding: 12, marginBottom: 16 }}>
+      <h2>Process Incoming Atomic BEEF</h2>
+      <p style={{fontSize: 12, color: '#555'}}>Paste an SPV-valid Atomic BEEF transaction to add new UTXOs to your vault.</p>
+      <textarea placeholder="Paste Atomic BEEF hex..." rows={4} style={{ width: '100%' }} value={hex} onChange={e => setHex(e.target.value)} />
+      <div style={{ marginTop: 8 }}>
+        <button onClick={handlePreview} disabled={isProcessing}>{isProcessing ? 'Verifying...' : 'Review & Process'}</button>
+      </div>
+    </section>
+  )
+}
+
+const ProcessIncomingModal: FC<{
+  vault: Vault
+  preview: IncomingPreview
+  onClose: () => void
+  onSuccess: (txid: string) => void
+  onError: (msg: string) => void
+}> = ({ vault, preview, onClose, onSuccess, onError }) => {
+  const needsConfirmation = vault.confirmIncomingCoins
+  const allVouts = preview.matches.map(m => m.outputIndex)
+  const [admit, setAdmit] = useState<Record<number, boolean>>(() => 
+    needsConfirmation ? {} : Object.fromEntries(allVouts.map(v => [v, true]))
+  )
+  const [memos, setMemos] = useState<Record<number, string>>({})
+  const [txMemo, setTxMemo] = useState('')
+  const [isFinalizing, setIsFinalizing] = useState(false)
+
+  const handleToggleAdmit = (vout: number) => {
+    setAdmit(prev => ({...prev, [vout]: !prev[vout]}))
+  }
+
+  const handleFinalize = async () => {
+    setIsFinalizing(true)
+    try {
+      const res = await vault.processIncoming(preview.tx, { txMemo, admit, perUtxoMemo: memos })
+      onSuccess(res.txid)
+    } catch (e: any) {
+      onError(e.message || 'An error occurred during finalization.')
+      onClose()
+    } finally {
+      setIsFinalizing(false)
+    }
+  }
+
+  return (
+    <Modal title="Review Incoming Transaction" onClose={onClose}>
+      <p style={{fontSize: 13}}>TXID: <code>{preview.txid}</code></p>
+      <p style={{fontSize: 13, color: 'green', fontWeight: 'bold'}}>SPV Verified Successfully</p>
+      <hr style={{margin: '16px 0'}} />
+      <p>The following outputs in this transaction are spendable by your vault's keys. {needsConfirmation ? 'Select which UTXOs to admit:' : 'All matched UTXOs will be admitted automatically.'}</p>
+      
+      {preview.matches.map(m => (
+        <div key={m.outputIndex} style={{border: '1px solid #eee', padding: 8, margin: '8px 0'}}>
+          {needsConfirmation && <input type="checkbox" checked={!!admit[m.outputIndex]} onChange={() => handleToggleAdmit(m.outputIndex)} style={{marginRight: 8}} />}
+          <strong>Output #{m.outputIndex}</strong>: {m.satoshis.toLocaleString()} sats, to Key <strong>{m.serial}</strong>
+          <input 
+            type="text" 
+            placeholder="UTXO Memo (optional)" 
+            style={{width: '100%', marginTop: 4}} 
+            value={memos[m.outputIndex] || ''}
+            onChange={e => setMemos(prev => ({...prev, [m.outputIndex]: e.target.value}))}
+          />
+        </div>
+      ))}
+
+      <input 
+        type="text" 
+        placeholder="Transaction Memo (optional)" 
+        style={{width: '100%', marginTop: 12}} 
+        value={txMemo}
+        onChange={e => setTxMemo(e.target.value)}
+      />
+
+      <div style={{marginTop: 16, display: 'flex', justifyContent: 'flex-end', gap: 12}}>
+        <button onClick={onClose} style={{background: '#777'}}>Cancel</button>
+        <button onClick={handleFinalize} disabled={isFinalizing || Object.values(admit).every(v => !v)}>
+          {isFinalizing ? 'Saving...' : `Admit ${Object.values(admit).filter(Boolean).length} UTXO(s)`}
+        </button>
+      </div>
+    </Modal>
+  )
+}
+
+const OutgoingBuilder: FC<{ vault: Vault, onUpdate: () => void, notify: (type: Notification['type'], msg: string) => void }> = ({ vault, onUpdate, notify }) => {
+  const [outLines, setOutLines] = useState<string>('')
+  const [manualInputs, setManualInputs] = useState<Record<string, boolean>>({})
+  const [changeSerials, setChangeSerials] = useState<Record<string, boolean>>({})
+  const [txMemo, setTxMemo] = useState<string>('')
+  const [selectionStrategy, setSelectionStrategy] = useState<AutoInputSelectionStrategy>('largest-first')
+  const [requirePerUtxoAttestation, setRequirePerUtxoAttestation] = useState<boolean>(false)
+  const [isBuilding, setIsBuilding] = useState(false)
+
+  function parseOutgoingLines(): OutgoingOutputSpec[] {
+    const lines = outLines.split('\n').map(s => s.trim()).filter(Boolean)
+    return lines.map(line => {
+      const parts = line.match(/^(\S+)\s+(\d+)(?:\s+(.*))?$/)
+      if (!parts) throw new Error(`Invalid output line format: ${line}`)
+      const [, dest, satStr, memo] = parts
+      const sat = Number(satStr)
+      if (!Number.isFinite(sat) || sat <= 0) throw new Error(`Bad amount on line: ${line}`)
+      return { destinationAddressOrScript: dest, satoshis: sat, memo: memo || '' }
+    })
+  }
+
+  async function buildAndSign() {
+    setIsBuilding(true)
+    try {
+      const outputs = parseOutgoingLines()
+      const selectedIds = Object.entries(manualInputs).filter(([_, on]) => on).map(([id]) => id)
+      const change = Object.entries(changeSerials).filter(([_, on]) => on).map(([s]) => s)
+
+      const attestationFn: AttestationFn | undefined = (vault.confirmOutgoingCoins && requirePerUtxoAttestation)
+        ? (coin) => new Promise(resolve => {
+            const id = coinId(coin.tx, coin.outputIndex)
+            const ok = window.confirm(`ATTESTATION REQUIRED:\n\nConfirm this UTXO is unspent on the HONEST chain:\n\n${id}\nAmount: ${coin.tx.outputs[coin.outputIndex].satoshis?.toLocaleString()} sats`)
+            resolve(ok)
+          })
+        : undefined
+
+      const { tx, atomicBEEFHex } = await vault.buildAndSignOutgoing({
+        outputs,
+        inputIds: selectedIds.length ? selectedIds : undefined,
+        strategy: selectionStrategy,
+        changeKeySerials: change.length ? change : undefined,
+        perUtxoAttestation: requirePerUtxoAttestation,
+        attestationFn,
+        txMemo
+      })
+
+      const blob = new Blob([atomicBEEFHex], { type: 'text/plain' })
+      const url = URL.createObjectURL(blob)
+      const a = document.createElement('a'); a.href = url; a.download = `tx_${tx.id('hex')}.atomic-beef.txt`; a.click()
+      URL.revokeObjectURL(url)
+
+      setOutLines(''); setManualInputs({}); setTxMemo('');
+      onUpdate()
+      notify('success', 'Transaction built & signed. Atomic BEEF downloaded. SAVE the vault to persist changes.')
+    } catch (e: any) {
+      notify('error', e.message || String(e))
+    } finally {
+      setIsBuilding(false)
+    }
+  }
+
+  return (
+    <section style={{ border: '1px solid #ddd', padding: 12, marginBottom: 16 }}>
+      <h2>Build Outgoing Transaction</h2>
+      <div style={{ marginBottom: 8, color: '#555', fontSize: 12 }}>
+        Enter outputs, one per line: <code>&lt;address_or_script_hex&gt; &lt;satoshis&gt; [optional memo]</code>
+      </div>
+      <textarea rows={4} style={{ width: '100%' }} value={outLines} onChange={e => setOutLines(e.target.value)} placeholder={`1ABC... 546 tip for good work\n76a914...88ac 1000 payment for invoice #123`} />
+      
+      <div style={{ marginTop: 8, display: 'flex', gap: 12, flexWrap: 'wrap', alignItems: 'center' }}>
+        <label>Strategy: <select value={selectionStrategy} onChange={e => setSelectionStrategy(e.target.value as AutoInputSelectionStrategy)}>
+          <option value="largest-first">largest-first</option>
+          <option value="smallest-first">smallest-first</option>
+          <option value="oldest-first">oldest-first</option>
+        </select></label>
+        {vault.confirmOutgoingCoins && <label><input type="checkbox" checked={requirePerUtxoAttestation} onChange={e => setRequirePerUtxoAttestation(e.target.checked)} /> Per-UTXO Attestation</label>}
+        <input placeholder="Transaction Memo (optional)" value={txMemo} onChange={e => setTxMemo(e.target.value)} />
+      </div>
+
+      <div style={{marginTop: 12}}>
+        <details>
+          <summary>Manual Input & Change Key Selection (Optional)</summary>
+          <div style={{marginTop: 12, borderTop: '1px dashed #ccc', paddingTop: 12}}>
+            <b>Input Selection (leave blank for auto)</b>
+            {vault.coins.length === 0 && <div>No spendable UTXOs</div>}
+            {vault.coins.map(c => {
+              const id = coinId(c.tx, c.outputIndex)
+              return <div key={id} style={{padding: '4px 0'}}><label>
+                  <input type="checkbox" checked={!!manualInputs[id]} onChange={e => setManualInputs(prev => ({ ...prev, [id]: e.target.checked }))} />
+                   {id} — {c.tx.outputs[c.outputIndex].satoshis?.toLocaleString()} sats
+                </label></div>
+            })}
+          </div>
+          <div style={{marginTop: 12, borderTop: '1px dashed #ccc', paddingTop: 12}}>
+            <b>Change Keys (leave blank for auto)</b>
+            {vault.keys.map(k => <div key={k.serial} style={{padding: '4px 0'}}><label>
+                <input type="checkbox" checked={!!changeSerials[k.serial]} onChange={e => setChangeSerials(prev => ({ ...prev, [k.serial]: e.target.checked }))}/>
+                {k.serial} {k.memo && `— ${k.memo}`}
+              </label></div>)}
+          </div>
+        </details>
+      </div>
+      
+      <div style={{ marginTop: 12 }}>
+        <button onClick={buildAndSign} disabled={isBuilding}>{isBuilding ? 'Building...' : 'Finalize & Sign'}</button>
+      </div>
+    </section>
   )
 }
