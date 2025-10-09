@@ -1,16 +1,196 @@
-import { useEffect, useMemo, useRef, useState, FC, ReactNode } from 'react'
+import React, { useEffect, useMemo, useState, FC, ReactNode, createContext, useCallback, useContext } from 'react'
 import {
   PrivateKey, P2PKH, Script, Transaction, PublicKey, ChainTracker,
   Utils, Hash, SymmetricKey, Random, TransactionOutput
 } from '@bsv/sdk'
 
 /**
- * ---------------------------------------------------------------------------
+ * =============================================================================
+ * Lightweight UI & Dialog System (no window.* usage anywhere)
+ * =============================================================================
+ */
+
+type Notification = { type: 'success' | 'error' | 'info', message: string, id: number }
+
+const COLORS = {
+  red: '#8b0000',
+  green: '#0a7b22',
+  blue: '#1e6bd6',
+  gray600: '#555',
+  gray700: '#333',
+  border: '#ddd',
+  light: '#f7f7f8',
+  panel: '#ffffff',
+}
+
+const appShellStyle: React.CSSProperties = { fontFamily: 'Inter, system-ui, -apple-system, Segoe UI, Roboto, sans-serif', background: COLORS.light, minHeight: '100vh', color: COLORS.gray700, colorScheme: 'light' }
+const containerStyle: React.CSSProperties = { padding: 16, maxWidth: 1180, margin: '0 auto' }
+const panelStyle: React.CSSProperties = { background: COLORS.panel, border: `1px solid ${COLORS.border}`, borderRadius: 8, padding: 16, boxShadow: '0 2px 10px rgba(0,0,0,0.03)' }
+const sectionStyle: React.CSSProperties = { ...panelStyle, marginBottom: 16 }
+const btnStyle: React.CSSProperties = { background: COLORS.blue, color: 'white', border: 'none', padding: '10px 14px', borderRadius: 6, cursor: 'pointer' }
+const btnGhostStyle: React.CSSProperties = { background: '#777', color: '#fff', border: 'none', padding: '10px 14px', borderRadius: 6, cursor: 'pointer' }
+const inputStyle: React.CSSProperties = {
+  border: `1px solid ${COLORS.border}`,
+  borderRadius: 6,
+  padding: '8px 10px',
+  width: '100%',
+  background: '#fff',      // ← add
+  color: '#111',           // ← add
+  caretColor: '#111'       // ← add
+}
+
+const NotificationBanner: FC<{ notification: Notification, onDismiss: () => void }> = ({ notification, onDismiss }) => {
+  const colors = { success: '#4CAF50', error: '#8b0000', info: '#2196F3' }
+  useEffect(() => {
+    const timer = setTimeout(onDismiss, 5000)
+    return () => clearTimeout(timer)
+  }, [notification.id, onDismiss])
+
+  return (
+    <div style={{
+      position: 'fixed', top: 16, right: 16, background: colors[notification.type], color: 'white',
+      padding: '12px 16px', borderRadius: 8, zIndex: 1000, boxShadow: '0 8px 24px rgba(0,0,0,0.2)',
+      display: 'flex', alignItems: 'center', gap: 16
+    }}>
+      <span>{notification.message}</span>
+      <button onClick={onDismiss} style={{ background: 'none', border: 'none', color: 'white', fontSize: 18, cursor: 'pointer' }}>&times;</button>
+    </div>
+  )
+}
+
+const Modal: FC<{ title: string, children: ReactNode, onClose: () => void }> = ({ title, children, onClose }) => {
+  return (
+    <div style={{
+      position: 'fixed',
+      top: 0,
+      left: 0,
+      right: 0,
+      bottom: 0,
+      background: 'rgba(0, 0, 0, 0.5)',
+      display: 'flex',
+      alignItems: 'center',
+      justifyContent: 'center',
+      zIndex: 1000 // Ensures it's on top of other content
+    }}>
+      {/* This is the actual modal panel */}
+      <div style={{
+        background: 'white',
+        color: '#111',
+        padding: 20,
+        borderRadius: 10,
+        minWidth: 540,
+        maxWidth: 900,
+        width: '90%'
+      }}>
+        <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', borderBottom: `1px solid ${COLORS.border}`, paddingBottom: 10, marginBottom: 15 }}>
+          <h2 style={{ margin: 0 }}>{title}</h2>
+          <button onClick={onClose} style={{ background: 'none', border: 'none', fontSize: 28, cursor: 'pointer', lineHeight: 1 }}>&times;</button>
+        </div>
+        {children}
+      </div>
+    </div>
+  )
+}
+
+/** Dialogs ------------------------------------------------------------------ */
+type DialogRequest =
+  | { kind: 'alert'; title?: string; message: string; resolve: () => void }
+  | { kind: 'confirm'; title?: string; message: string; resolve: (ok: boolean) => void }
+  | { kind: 'prompt'; title?: string; message: string; password?: boolean; defaultValue?: string; resolve: (val: string | null) => void }
+
+type DialogAPI = {
+  alert(msg: string, title?: string): Promise<void>
+  confirm(msg: string, title?: string): Promise<boolean>
+  prompt(msg: string, opts?: { title?: string; password?: boolean; defaultValue?: string }): Promise<string | null>
+}
+
+const DialogCtx = createContext<DialogAPI | null>(null)
+
+const DialogHost: FC<{ queue: DialogRequest[]; setQueue: React.Dispatch<React.SetStateAction<DialogRequest[]>> }> = ({ queue, setQueue }) => {
+  if (!queue.length) return null
+  const req = queue[0]
+  const close = () => setQueue(q => q.slice(1))
+
+  if (req.kind === 'alert') {
+    return (
+      <Modal title={req.title || 'Notice'} onClose={() => { req.resolve(); close() }}>
+        <p style={{ whiteSpace: 'pre-wrap' }}>{req.message}</p>
+        <div style={{ display: 'flex', justifyContent: 'flex-end', marginTop: 12 }}>
+          <button onClick={() => { req.resolve(); close() }} style={btnStyle}>OK</button>
+        </div>
+      </Modal>
+    )
+  }
+  if (req.kind === 'confirm') {
+    return (
+      <Modal title={req.title || 'Confirm'} onClose={() => { req.resolve(false); close() }}>
+        <p style={{ whiteSpace: 'pre-wrap' }}>{req.message}</p>
+        <div style={{ display: 'flex', justifyContent: 'flex-end', marginTop: 12, gap: 8 }}>
+          <button onClick={() => { req.resolve(false); close() }} style={btnGhostStyle}>Cancel</button>
+          <button onClick={() => { req.resolve(true); close() }} style={btnStyle}>OK</button>
+        </div>
+      </Modal>
+    )
+  }
+  // prompt
+  const [val, setVal] = React.useState(req.defaultValue || '')
+  return (
+    <Modal title={req.title || 'Input required'} onClose={() => { req.resolve(null); close() }}>
+      <p style={{ whiteSpace: 'pre-wrap' }}>{req.message}</p>
+      <input
+        type={req.password ? 'password' : 'text'}
+        value={val}
+        onChange={e => setVal(e.target.value)}
+        style={{ ...inputStyle, marginTop: 8 }}
+        autoFocus
+      />
+      <div style={{ display: 'flex', justifyContent: 'flex-end', marginTop: 12, gap: 8 }}>
+        <button onClick={() => { req.resolve(null); close() }} style={btnGhostStyle}>Cancel</button>
+        <button onClick={() => { req.resolve(val); close() }} style={btnStyle}>OK</button>
+      </div>
+    </Modal>
+  )
+}
+
+export const DialogProvider: FC<{ children: ReactNode }> = ({ children }) => {
+  const [queue, setQueue] = React.useState<DialogRequest[]>([])
+  const push = useCallback(<T,>(req: Omit<DialogRequest, 'resolve'>) =>
+    new Promise<T>(resolve => setQueue(q => [...q, { ...(req as any), resolve }]))
+  , [])
+
+  const api: DialogAPI = {
+    alert: (message, title) => push<void>({ kind: 'alert', title, message }),
+    confirm: (message, title) => push<boolean>({ kind: 'confirm', title, message }),
+    prompt: (message, opts) => push<string | null>({ kind: 'prompt', title: opts?.title, message, password: opts?.password, defaultValue: opts?.defaultValue })
+  }
+  return (
+    <DialogCtx.Provider value={api}>
+      {children}
+      <DialogHost queue={queue} setQueue={setQueue} />
+    </DialogCtx.Provider>
+  )
+}
+
+export const useDialog = () => {
+  const ctx = useContext(DialogCtx)
+  if (!ctx) throw new Error('useDialog must be used within DialogProvider')
+  return ctx
+}
+
+/**
+ * =============================================================================
  * Types & Utilities
- * ---------------------------------------------------------------------------
+ * =============================================================================
  */
 
 type UnixMs = number
+
+/** Dialog bridge for Vault business logic (no window.*) */
+type UiBridge = {
+  alert: (msg: string, title?: string) => Promise<void>
+  confirm: (msg: string, title?: string) => Promise<boolean>
+  prompt: (msg: string, opts?: { title?: string; password?: boolean; defaultValue?: string }) => Promise<string | null>
+}
 
 /** A serializable, sanitized session/vault event. */
 type AuditEvent = {
@@ -78,15 +258,12 @@ type IncomingPreview = {
   spvValid: boolean
 }
 
-type AutoInputSelectionStrategy = 'largest-first' | 'smallest-first' | 'oldest-first'
-
 type AttestationFn = (coin: CoinRecord) => Promise<boolean>
 
 type BuildOutgoingOptions = {
   outputs: OutgoingOutputSpec[]
-  inputIds?: string[]
-  strategy?: AutoInputSelectionStrategy
-  changeKeySerials?: string[]
+  inputIds?: string[]          // REQUIRED now (enforced)
+  changeKeySerials?: string[]  // REQUIRED now (enforced)
   /**
    * If true and policy requires outgoing attestation, the provided `attestationFn`
    * will be called for each input UTXO.
@@ -106,16 +283,17 @@ function assert (cond: any, msg: string): asserts cond {
 }
 
 /**
- * ---------------------------------------------------------------------------
+ * =============================================================================
  * Vault class
- * ---------------------------------------------------------------------------
  * - Implements ChainTracker.
- * - Holds derived encryption key (NOT the password) so we never re-prompt.
- * - Exposes non-interactive APIs for UI to drive flows without window.prompt.
- * - Interactive prompts for ChainTracker SPV confirmation steps.
+ * - Holds derived encryption key (NOT the password).
+ * - Non-interactive APIs; all secure UX via UiBridge.
+ * =============================================================================
  */
 
 class Vault implements ChainTracker {
+  constructor(private ui: UiBridge) {}
+
   /** File format / policy */
   protocolVersion = 1
   passwordRounds = 80000
@@ -184,7 +362,10 @@ class Vault implements ChainTracker {
     )
     if (ephemeral !== -1) return true
 
-    const accepted = window.confirm(`Do you accept and confirm that block #${height} of the HONEST chain has a merkle root of "${root}"?`)
+    const accepted = await this.ui.confirm(
+      `Do you accept and confirm that block #${height} of the HONEST chain has a merkle root of:\n${root}`,
+      'Confirm Merkle Root'
+    )
     if (!accepted) return false
 
     // Decide whether to persist
@@ -193,7 +374,8 @@ class Vault implements ChainTracker {
       this.logVault('chain.header.ephemeral', `h=${height} root=${root}`)
       this.logSession('chain.header.ephemeral', `h=${height} root=${root}`)
     } else {
-      let memo = window.prompt('Enter the source(s) used to confirm this merkle root:') || 'No memo provided.'
+      let memo = await this.ui.prompt('Enter the source(s) used to confirm this merkle root:', { title: 'Merkle Root Memo' })
+      if (!memo) memo = 'No memo provided.'
       this.persistedHeaderClaims.push({ at: Date.now(), merkleRoot: root, height, memo })
       this.logVault('chain.header.persisted', `h=${height} root=${root} memo=${memo}`)
       this.logSession('chain.header.persisted', `h=${height} root=${root} memo=${memo}`)
@@ -211,12 +393,12 @@ class Vault implements ChainTracker {
     let height = 0
     do {
       try {
-        const input = window.prompt('Enter the current block height for the HONEST chain:')
+        const input = await this.ui.prompt('Enter the current block height for the HONEST chain:', { title: 'Block Height' })
         const n = Number(input)
         if (Number.isInteger(n) && n > 0) height = n
-        else window.alert('Height must be a positive integer, try again.')
+        else await this.ui.alert('Height must be a positive integer, try again.', 'Invalid Input')
       } catch (e) {
-        window.alert((e as any).message || 'Error processing height, try again.')
+        await this.ui.alert((e as any).message || 'Error processing height, try again.', 'Error')
       }
     } while (height === 0)
     this.currentBlockHeight = height
@@ -228,15 +410,15 @@ class Vault implements ChainTracker {
   // -------------------------------------------------------------------------
   // Creation / Loading / Saving (no re-prompt once key is set)
   // -------------------------------------------------------------------------
-  static async create (): Promise<Vault> {
-    const v = new Vault()
+  static async create (ui: UiBridge): Promise<Vault> {
+    const v = new Vault(ui)
     v.logSession('wizard.start', 'create')
 
-    const name = window.prompt('Enter a vault display name:') || 'Vault'
+    const name = (await ui.prompt('Enter a vault display name:', { title: 'Vault Name' })) || 'Vault'
     v.vaultName = name
     v.logVault('vault.created', name)
 
-    const roundsIn = window.prompt(`PBKDF2 rounds? (default ${v.passwordRounds})`)
+    const roundsIn = await ui.prompt(`PBKDF2 rounds? (default ${v.passwordRounds})`, { title: 'PBKDF2 Rounds', defaultValue: String(v.passwordRounds) })
     if (roundsIn && /^\d+$/.test(roundsIn)) {
       const n = Number(roundsIn)
       if (n >= 1) v.passwordRounds = n
@@ -246,40 +428,37 @@ class Vault implements ChainTracker {
     v.logKV('vault', 'passwordSalt.len', String(v.passwordSalt.length))
 
     // Require password once, derive and cache key
-    const pw = window.prompt('Set a password for this vault file (required):') || ''
+    const pw = (await ui.prompt('Set a password for this vault file (required):', { title: 'Vault Password', password: true })) || ''
     if (!pw) throw new Error('Password required to create vault.')
     const keyBytes = Hash.pbkdf2(Utils.toArray(pw), v.passwordSalt, v.passwordRounds, 32)
     v.encryptionKey = new SymmetricKey(keyBytes)
     v.logVault('vault.key.derived', `klen=${keyBytes.length}`)
 
     // Policy toggles
-    v.confirmIncomingCoins = window.confirm('Require attestation for incoming UTXOs? (OK = yes, Recommended)')
-    v.confirmOutgoingCoins = window.confirm('Require attestation for outgoing UTXOs? (OK = yes)')
+    v.confirmIncomingCoins = await ui.confirm('Require attestation for incoming UTXOs? (Recommended)', 'Incoming Attestation')
+    v.confirmOutgoingCoins = await ui.confirm('Require attestation for outgoing UTXOs?', 'Outgoing Attestation')
     v.logKV('vault', 'confirmIncomingCoins', String(v.confirmIncomingCoins))
     v.logKV('vault', 'confirmOutgoingCoins', String(v.confirmOutgoingCoins))
 
     // Header settings
-    const older = window.prompt(`Persist headers older than how many blocks? (default ${v.persistHeadersOlderThanBlocks})`)
+    const older = await ui.prompt(`Persist headers older than how many blocks? (default ${v.persistHeadersOlderThanBlocks})`, { title: 'Header Persistence', defaultValue: String(v.persistHeadersOlderThanBlocks) })
     if (older && /^\d+$/.test(older)) v.persistHeadersOlderThanBlocks = Number(older)
-    const recentSec = window.prompt(`Re-verify recent headers after how many seconds? (default ${v.reverifyRecentHeadersAfterSeconds})`)
+    const recentSec = await ui.prompt(`Re-verify recent headers after how many seconds? (default ${v.reverifyRecentHeadersAfterSeconds})`, { title: 'Re-verify Recent Headers', defaultValue: String(v.reverifyRecentHeadersAfterSeconds) })
     if (recentSec && /^\d+$/.test(recentSec)) v.reverifyRecentHeadersAfterSeconds = Number(recentSec)
-    const heightSec = window.prompt(`Re-verify current block height after how many seconds? (default ${v.reverifyCurrentBlockHeightAfterSeconds})`)
+    const heightSec = await ui.prompt(`Re-verify current block height after how many seconds? (default ${v.reverifyCurrentBlockHeightAfterSeconds})`, { title: 'Re-verify Height', defaultValue: String(v.reverifyCurrentBlockHeightAfterSeconds) })
     if (heightSec && /^\d+$/.test(heightSec)) v.reverifyCurrentBlockHeightAfterSeconds = Number(heightSec)
-    v.logKV('vault', 'persistHeadersOlderThanBlocks', String(v.persistHeadersOlderThanBlocks))
-    v.logKV('vault', 'reverifyRecentHeadersAfterSeconds', String(v.reverifyRecentHeadersAfterSeconds))
-    v.logKV('vault', 'reverifyCurrentBlockHeightAfterSeconds', String(v.reverifyCurrentBlockHeightAfterSeconds))
 
     v.logSession('wizard.complete', 'create')
     return v
   }
 
-  static loadFromFile (file: number[]): Vault {
-    const v = new Vault()
+  static async loadFromFile (ui: UiBridge, file: number[]): Promise<Vault> {
+    const v = new Vault(ui)
     v.logSession('vault.load.start', `size=${file.length}`)
 
     const fileHash = Utils.toHex(Hash.sha256(file))
     v.logSession('vault.load.hash', fileHash)
-    const ok = window.confirm(`Ensure the SHA-256 hash of the vault file that you stored matches:\n${fileHash}`)
+    const ok = await ui.confirm(`Ensure the SHA-256 hash of the vault file that you stored matches:\n${fileHash}`, 'Verify Vault File Hash')
     if (!ok) throw new Error('Vault file SHA-256 has not been verified.')
 
     const r = new Utils.Reader(file)
@@ -293,10 +472,9 @@ class Vault implements ChainTracker {
     const salt = r.read(32); v.passwordSalt = salt
     const encrypted = r.read()
 
-    // Prompt ONCE for password on load
     let decrypted: number[] = []
     do {
-      const pw = window.prompt('Enter vault password:')
+      const pw = await ui.prompt('Enter vault password:', { title: 'Unlock Vault', password: true })
       const kb = Hash.pbkdf2(Utils.toArray(pw || ''), salt, rounds, 32)
       const key = new SymmetricKey(kb)
       try {
@@ -305,7 +483,7 @@ class Vault implements ChainTracker {
         v.logSession('vault.decrypt.ok', `payload=${decrypted.length}B`)
       } catch {
         v.logSession('vault.decrypt.fail')
-        window.alert('Failed to unlock the vault.')
+        await ui.alert('Failed to unlock the vault.', 'Decryption Error')
       }
     } while (decrypted.length === 0)
 
@@ -354,8 +532,7 @@ class Vault implements ChainTracker {
     a.click()
     URL.revokeObjectURL(url)
     const msg = `Vault file downloaded.\n\nRevision: ${this.vaultRevision}\nSHA-256 (hex):\n${hashHex}\n\nVerify and store this new file safely. Securely delete any old vault versions.`
-    // Use alert here as it's a critical final confirmation
-    alert(msg)
+    await this.ui.alert(msg, 'Vault Saved')
   }
 
   // -------------------------------------------------------------------------
@@ -468,8 +645,8 @@ class Vault implements ChainTracker {
       const net = d.readVarIntNum()
       const memoLen = d.readVarIntNum()
       const memo = Utils.toUTF8(d.read(memoLen))
-      const processed = d.readVarIntNum() !== 0
       const txid = Transaction.fromAtomicBEEF(atomicBEEF).id('hex')
+      const processed = d.readVarIntNum() !== 0
       this.transactionLog.push({ at, atomicBEEF, net, memo, processed, txid })
     }
 
@@ -528,11 +705,11 @@ class Vault implements ChainTracker {
     return rec
   }
 
-  downloadDepositSlipTxt (serial: string): void {
+  async downloadDepositSlipTxt (serial: string): Promise<void> {
     const key = this.keys.find(k => k.serial === serial)
     if (!key) throw new Error('Key not found.')
     if (key.usedOnChain) {
-      const ok = window.confirm('WARNING: this key appears used on-chain. Continue to download deposit info?')
+      const ok = await this.ui.confirm('WARNING: this key appears used on-chain. Continue to download deposit info?', 'Used Key Warning')
       if (!ok) return
     }
 
@@ -642,7 +819,7 @@ Instructions:
   }
 
   // -------------------------------------------------------------------------
-  // Outgoing builder (no prompts). UI drives stipulation and selection.
+  // Outgoing builder (manual-only). UI drives stipulation and selection.
   // -------------------------------------------------------------------------
   private parseOutputSpec (spec: OutgoingOutputSpec): { lockingScript: Script, satoshis: number, memo?: string } {
     const { destinationAddressOrScript: dest, satoshis, memo } = spec
@@ -656,56 +833,25 @@ Instructions:
     return { lockingScript: lock, satoshis, memo }
   }
 
-  /** Deterministic, safe coin selection. */
-  private selectInputs (need: number, strategy: AutoInputSelectionStrategy, candidates: CoinRecord[]): CoinRecord[] {
-    const coins = [...candidates]
-    if (strategy === 'largest-first') coins.sort((a, b) =>
-      (b.tx.outputs[b.outputIndex].satoshis as number) - (a.tx.outputs[a.outputIndex].satoshis as number))
-    else if (strategy === 'smallest-first') coins.sort((a, b) =>
-      (a.tx.outputs[a.outputIndex].satoshis as number) - (b.tx.outputs[b.outputIndex].satoshis as number))
-    else if (strategy === 'oldest-first') coins.sort((a, b) =>
-      (a.tx.id('hex') as string).localeCompare(b.tx.id('hex') as string))
-
-    const sel: CoinRecord[] = []
-    let acc = 0
-    for (const c of coins) {
-      sel.push(c)
-      acc += (c.tx.outputs[c.outputIndex].satoshis as number)
-      if (acc >= need) break
-    }
-    if (acc < need) throw new Error(`Insufficient funds: need ${need} sats, selected ${acc} sats.`)
-    return sel
-  }
-
   async buildAndSignOutgoing (opts: BuildOutgoingOptions): Promise<{ tx: Transaction, atomicBEEFHex: string, usedInputIds: string[], changeIds: string[] }> {
     assert(this.coins.length > 0, 'No spendable UTXOs.')
     const outputs = opts.outputs.map(o => this.parseOutputSpec(o))
     assert(outputs.length > 0, 'No outputs specified.')
 
-    // Determine change keys
-    let changeKeys: KeyRecord[] = []
-    if (opts.changeKeySerials && opts.changeKeySerials.length > 0) {
-      changeKeys = opts.changeKeySerials.map(s => {
-        const k = this.keys.find(kk => kk.serial === s)
-        if (!k) throw new Error(`Change key not found: ${s}`)
-        return k
-      })
-    } else {
-      const unused = [...this.keys].filter(k => !k.usedOnChain).sort((a, b) => a.serial.localeCompare(b.serial))
-      changeKeys = unused.length ? [unused[unused.length - 1]] : (this.keys.length ? [this.keys[0]] : [])
-      if (changeKeys.length === 0) throw new Error('No keys available for change.')
-    }
+    // REQUIRE explicit change keys
+    assert(opts.changeKeySerials && opts.changeKeySerials.length > 0, 'At least one change key must be selected.')
+    const changeKeys = opts.changeKeySerials.map(s => {
+      const k = this.keys.find(kk => kk.serial === s)
+      if (!k) throw new Error(`Change key not found: ${s}`)
+      return k
+    })
 
-    let selected: CoinRecord[] = []
-    if (opts.inputIds && opts.inputIds.length > 0) {
-      const byId = new Map(this.coins.map(c => [coinId(c.tx, c.outputIndex), c] as const))
-      selected = opts.inputIds.map(id => {
-        const c = byId.get(id); if (!c) throw new Error(`Input not found: ${id}`); return c
-      })
-    }
-
-    const strategy = opts.strategy || 'largest-first'
-    const available = this.coins.filter(c => !selected.some(s => coinId(s.tx, s.outputIndex) === coinId(c.tx, c.outputIndex)))
+    // REQUIRE explicit inputs
+    assert(opts.inputIds && opts.inputIds.length > 0, 'You must manually select at least one input UTXO.')
+    const byId = new Map(this.coins.map(c => [coinId(c.tx, c.outputIndex), c] as const))
+    const selected = opts.inputIds.map(id => {
+      const c = byId.get(id); if (!c) throw new Error(`Input not found: ${id}`); return c
+    })
 
     const tx = new Transaction()
     for (const o of outputs) tx.addOutput(o)
@@ -723,8 +869,6 @@ Instructions:
         unlockingScriptTemplate: new P2PKH().unlock(this.keys.find(x => x.serial === s.keySerial)!.private)
       })
     }
-
-    debugger
 
     // Fee to miners, change to change outputs
     await tx.fee() // TODO: support custom fees and fee models
@@ -785,67 +929,41 @@ ${redacted.map(x => `[${x.at}]: ${x.event}, ${x.data}`)}
 }
 
 /**
- * ---------------------------------------------------------------------------
- * React UI (thin adapter): no business logic here.
- * ---------------------------------------------------------------------------
+ * =============================================================================
+ * React App Shell (Tabs + Views)
+ * =============================================================================
  */
 
-type Notification = { type: 'success' | 'error' | 'info', message: string, id: number }
-
-const NotificationBanner: FC<{ notification: Notification, onDismiss: () => void }> = ({ notification, onDismiss }) => {
-  const colors = { success: '#4CAF50', error: '#8b0000', info: '#2196F3' }
-  useEffect(() => {
-    const timer = setTimeout(onDismiss, 5000)
-    return () => clearTimeout(timer)
-  }, [notification.id, onDismiss])
-
-  return (
-    <div style={{
-      position: 'fixed', top: 16, right: 16, background: colors[notification.type], color: 'white',
-      padding: '12px 16px', borderRadius: 4, zIndex: 1000, boxShadow: '0 2px 10px rgba(0,0,0,0.2)',
-      display: 'flex', alignItems: 'center', gap: 16
-    }}>
-      <span>{notification.message}</span>
-      <button onClick={onDismiss} style={{ background: 'none', border: 'none', color: 'white', fontSize: 16, cursor: 'pointer' }}>&times;</button>
-    </div>
-  )
-}
-
-const Modal: FC<{ title: string, children: ReactNode, onClose: () => void }> = ({ title, children, onClose }) => {
-  return (
-    <div style={{
-      position: 'fixed', top: 0, left: 0, right: 0, bottom: 0, background: 'rgba(0,0,0,0.5)',
-      display: 'flex', alignItems: 'center', justifyContent: 'center', zIndex: 999
-    }}>
-      <div style={{ background: 'white', padding: 20, borderRadius: 5, minWidth: 500, maxWidth: '90%' }}>
-        <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', borderBottom: '1px solid #ddd', paddingBottom: 10, marginBottom: 15 }}>
-          <h2>{title}</h2>
-          <button onClick={onClose} style={{ background: 'none', border: 'none', fontSize: 24, cursor: 'pointer' }}>&times;</button>
-        </div>
-        {children}
-      </div>
-    </div>
-  )
-}
+type TabKey = 'keys' | 'incoming' | 'outgoing' | 'dashboard' | 'settings'
 
 export default function App () {
+  return (
+    <DialogProvider>
+      <AppInner />
+    </DialogProvider>
+  )
+}
+
+function AppInner () {
+  const dialog = useDialog()
+
   const [vault, setVault] = useState<Vault | null>(null)
   const [lastSavedPlainHash, setLastSavedPlainHash] = useState<string | null>(null)
   const [notification, setNotification] = useState<Notification | null>(null)
   const [incomingPreview, setIncomingPreview] = useState<IncomingPreview | null>(null)
   const [isLoading, setIsLoading] = useState(false)
+  const [activeTab, setActiveTab] = useState<TabKey>('dashboard')
 
   function notify(type: Notification['type'], message: string) {
     setNotification({ type, message, id: Date.now() })
   }
 
   // --- Core Vault Actions ---
-  
   async function onOpenVault (file: File) {
     setIsLoading(true);
     try {
       const buf = new Uint8Array(await file.arrayBuffer())
-      const v = Vault.loadFromFile(Array.from(buf))
+      const v = await Vault.loadFromFile(dialog, Array.from(buf))
       setVault(v)
       setLastSavedPlainHash(v.computePlaintextHashHex())
       notify('success', 'Vault loaded successfully.')
@@ -859,10 +977,11 @@ export default function App () {
   async function onNewVault () {
     setIsLoading(true);
     try {
-      const v = await Vault.create()
+      const v = await Vault.create(dialog)
       setVault(v)
       setLastSavedPlainHash(v.computePlaintextHashHex())
       notify('info', 'New vault created. Generate a key to begin.')
+      setActiveTab('keys')
     } catch (e: any) {
       notify('error', e.message || 'Failed to create vault.')
     } finally {
@@ -883,15 +1002,14 @@ export default function App () {
       setIsLoading(false)
     }
   }
-  
+
   // A clean way to trigger a re-render after mutating the vault instance.
   function triggerRerender () {
     if (!vault) return
     setVault(Object.assign(Object.create(Object.getPrototypeOf(vault)), vault))
   }
-  
-  // --- Derived State & Components ---
 
+  // --- Derived State ---
   const dirty = useMemo(() => {
     if (!vault || !lastSavedPlainHash) return false
     return vault.computePlaintextHashHex() !== lastSavedPlainHash
@@ -902,124 +1020,219 @@ export default function App () {
     return vault.coins.reduce((n, c) => n + (c.tx.outputs[c.outputIndex].satoshis as number), 0)
   }, [vault?.coins])
 
+  // --- Loading / Unloaded State ---
   if (isLoading) {
-    return <div style={{ fontFamily: 'Inter, system-ui, sans-serif', padding: 32, textAlign: 'center' }}>Loading Vault...</div>
-  }
-
-  if (!vault) {
     return (
-      <div style={{ fontFamily: 'Inter, system-ui, sans-serif', padding: 16, maxWidth: 1100, margin: '0 auto' }}>
-        {notification && <NotificationBanner notification={notification} onDismiss={() => setNotification(null)} />}
-        <h1>BSV Vault Manager Suite</h1>
-        <section style={{ border: '1px solid #ddd', padding: 12, marginBottom: 16 }}>
-          <h2>Open / New</h2>
-          <div style={{ display: 'flex', gap: 12, alignItems: 'center', flexWrap: 'wrap' }}>
-            <input type="file" accept=".vaultfile,application/octet-stream" onChange={e => e.target.files && onOpenVault(e.target.files[0])} />
-            <button onClick={onNewVault}>Create New Vault</button>
-          </div>
-        </section>
-        <p>Open an existing vault or create a new one.</p>
+      <div style={appShellStyle}>
+        <div style={{ ...containerStyle, textAlign: 'center' }}>Loading Vault...</div>
       </div>
     )
   }
 
-  // --- Main Vault Dashboard ---
+  if (!vault) {
+    return (
+      <div style={appShellStyle}>
+        <div style={containerStyle}>
+          {notification && <NotificationBanner notification={notification} onDismiss={() => setNotification(null)} />}
+          <div style={{ ...panelStyle, padding: 24 }}>
+            <h1 style={{ marginTop: 0 }}>BSV Vault Manager Suite</h1>
+            <section style={{ border: `1px solid ${COLORS.border}`, padding: 16, borderRadius: 8 }}>
+              <h2 style={{ marginTop: 0 }}>Open / New</h2>
+              <div style={{ display: 'flex', gap: 12, alignItems: 'center', flexWrap: 'wrap' }}>
+                <input type="file" accept=".vaultfile,application/octet-stream" onChange={e => e.target.files && onOpenVault(e.target.files[0])} />
+                <button onClick={onNewVault} style={btnStyle}>Create New Vault</button>
+              </div>
+            </section>
+            <p style={{ color: COLORS.gray600, marginTop: 12 }}>Open an existing vault or create a new one.</p>
+          </div>
+        </div>
+      </div>
+    )
+  }
+
+  // --- Tabs ---
+  const tabs: { key: TabKey; label: string }[] = [
+    { key: 'dashboard', label: 'Dashboard' },
+    { key: 'keys', label: 'Keys' },
+    { key: 'incoming', label: 'Incoming' },
+    { key: 'outgoing', label: 'Outgoing' },
+    { key: 'settings', label: 'Settings' }
+  ]
 
   return (
-    <div style={{ fontFamily: 'Inter, system-ui, sans-serif', padding: 16, maxWidth: 1100, margin: '0 auto' }}>
-      {notification && <NotificationBanner notification={notification} onDismiss={() => setNotification(null)} />}
-      
-      {incomingPreview && (
-        <ProcessIncomingModal
-          vault={vault}
-          preview={incomingPreview}
-          onClose={() => setIncomingPreview(null)}
-          onSuccess={(txid) => {
-            setIncomingPreview(null)
-            triggerRerender()
-            notify('success', `Transaction ${txid} processed. SAVE the vault to persist changes.`)
-          }}
-          onError={(err) => notify('error', err)}
-        />
-      )}
+    <div style={appShellStyle}>
+      <div style={containerStyle}>
+        {notification && <NotificationBanner notification={notification} onDismiss={() => setNotification(null)} />}
 
-      <h1>BSV Vault Manager Suite</h1>
+        {incomingPreview && (
+          <ProcessIncomingModal
+            vault={vault}
+            preview={incomingPreview}
+            onClose={() => setIncomingPreview(null)}
+            onSuccess={(txid) => {
+              setIncomingPreview(null)
+              triggerRerender()
+              notify('success', `Transaction ${txid} processed. SAVE the vault to persist changes.`)
+            }}
+            onError={(err) => notify('error', err)}
+          />
+        )}
 
-      {dirty && (
-        <div style={{ background: '#8b0000', color: 'white', padding: 12, marginBottom: 12, fontWeight: 700 }}>
-          UNSAVED CHANGES — Save the new vault file, verify its integrity, and then securely delete the old version.
-        </div>
-      )}
+        <div style={{ ...panelStyle, padding: 24, marginBottom: 16 }}>
+          {dirty && (
+            <div style={{ background: COLORS.red, color: 'white', padding: 12, marginBottom: 12, fontWeight: 700, borderRadius: 6 }}>
+              UNSAVED CHANGES — Save the new vault file, verify its integrity, and then securely delete the old version.
+            </div>
+          )}
 
-      <header style={{ border: '1px solid #ddd', padding: 12, marginBottom: 16 }}>
-        <h2>Vault: <b>{vault.vaultName}</b> (rev {vault.vaultRevision})</h2>
-        <div style={{ display: 'flex', gap: 12, alignItems: 'center', flexWrap: 'wrap' }}>
-          <input type="file" accept=".vaultfile,application/octet-stream" onChange={e => e.target.files && onOpenVault(e.target.files[0])} />
-          <button onClick={onSaveVault}>Save Vault</button>
-          <button onClick={() => { vault.exportSessionLog() }}>Export Session Log</button>
-        </div>
-      </header>
-
-      <KeyManager vault={vault} onUpdate={triggerRerender} />
-      <IncomingManager vault={vault} onPreview={setIncomingPreview} onError={(e) => notify('error', e)} />
-      <OutgoingBuilder vault={vault} onUpdate={triggerRerender} notify={notify} />
-      
-      <section style={{ border: '1px solid #ddd', padding: 12, marginBottom: 16 }}>
-        <h2>Dashboard</h2>
-        <div>Total balance: <b>{balance.toLocaleString()}</b> sats (<b>{(balance / 100000000).toFixed(8)}</b> BSV)</div>
-        <div style={{ display: 'flex', gap: 24, marginTop: 16 }}>
-          <div style={{ flex: 1 }}>
-            <h3>Current UTXOs ({vault.coins.length})</h3>
-            {vault.coins.length === 0 && <div>No spendable coins</div>}
-            {vault.coins.map(c => {
-              const out = c.tx.outputs[c.outputIndex]
-              const id = `${c.tx.id('hex')}:${c.outputIndex}`
-              return (
-                <div key={id} style={{ borderTop: '1px solid #eee', padding: '8px 0', fontSize: '12px' }}>
-                  <div><b>{id}</b> — {out.satoshis?.toLocaleString()} sats (<b>{(out.satoshis as number / 100000000).toFixed(8)}</b> BSV)</div>
-                  {c.memo && <div>Memo: {c.memo}</div>}
-                </div>
-              )
-            })}
-          </div>
-          <div style={{ flex: 1 }}>
-            <h3>Transaction Log ({vault.transactionLog.length})</h3>
-            {[...vault.transactionLog].reverse().map(t => (
-              <div key={t.txid} style={{ borderTop: '1px solid #eee', padding: '8px 0', fontSize: '12px' }}>
-                <div><b>{t.txid}</b></div>
-                {t.memo && <div>Memo: {t.memo}</div>}
-                <div style={{ color: t.net >= 0 ? 'green' : 'red' }}>
-                  Net: {t.net.toLocaleString()} sats (<b>{(t.net / 100000000).toFixed(8)}</b> BSV)
-                </div>
-                <label>
-                  <input type="checkbox" checked={t.processed} onChange={e => { vault.markProcessed(t.txid, e.target.checked); triggerRerender() }} />
-                   Mark processed
-                </label>
+          <header style={{ borderBottom: `1px solid ${COLORS.border}`, paddingBottom: 12, marginBottom: 16, display: 'flex', justifyContent: 'space-between', alignItems: 'center', gap: 12, flexWrap: 'wrap' }}>
+            <div>
+              <h1 style={{ margin: 0 }}>BSV Vault Manager Suite</h1>
+              <div style={{ color: COLORS.gray600, marginTop: 4 }}>
+                Vault: <b>{vault.vaultName}</b> (rev {vault.vaultRevision})
               </div>
+            </div>
+            <div style={{ display: 'flex', gap: 12, alignItems: 'center', flexWrap: 'wrap' }}>
+              <input type="file" accept=".vaultfile,application/octet-stream" onChange={e => e.target.files && onOpenVault(e.target.files[0])} />
+              <button onClick={onSaveVault} style={btnStyle}>Save Vault</button>
+              <button onClick={() => { vault.exportSessionLog() }} style={btnGhostStyle}>Export Session Log</button>
+            </div>
+          </header>
+
+          {/* Tabs */}
+          <div style={{ display: 'flex', gap: 8, borderBottom: `1px solid ${COLORS.border}`, marginBottom: 16, overflowX: 'auto' }}>
+            {tabs.map(t => (
+              <button
+                key={t.key}
+                onClick={() => setActiveTab(t.key)}
+                style={{
+                  background: activeTab === t.key ? COLORS.blue : 'transparent',
+                  color: activeTab === t.key ? '#fff' : COLORS.gray700,
+                  border: 'none',
+                  borderRadius: 8,
+                  padding: '8px 12px',
+                  cursor: 'pointer'
+                }}
+              >
+                {t.label}
+              </button>
             ))}
           </div>
-        </div>
-      </section>
 
+          {/* Active Tab Panels */}
+          {activeTab === 'dashboard' && (
+            <DashboardPanel vault={vault} balance={balance} triggerRerender={triggerRerender} />
+          )}
+
+          {activeTab === 'keys' && (
+            <KeyManager
+              vault={vault}
+              onUpdate={triggerRerender}
+              notify={notify}
+            />
+          )}
+
+          {activeTab === 'incoming' && (
+            <IncomingManager
+              vault={vault}
+              onPreview={setIncomingPreview}
+              onError={(e) => notify('error', e)}
+            />
+          )}
+
+          {activeTab === 'outgoing' && (
+            <OutgoingWizard
+              vault={vault}
+              notify={notify}
+              onUpdate={triggerRerender}
+            />
+          )}
+
+          {activeTab === 'settings' && (
+            <SettingsPanel vault={vault} onUpdate={triggerRerender} />
+          )}
+        </div>
+      </div>
     </div>
   )
 }
 
-// --- UI Sub-components ---
+/**
+ * =============================================================================
+ * Panels & Components
+ * =============================================================================
+ */
 
-const KeyManager: FC<{ vault: Vault, onUpdate: () => void }> = ({ vault, onUpdate }) => {
+const DashboardPanel: FC<{ vault: Vault, balance: number, triggerRerender: () => void }> = ({ vault, balance, triggerRerender }) => {
   return (
-    <section style={{ border: '1px solid #ddd', padding: 12, marginBottom: 16 }}>
-      <h2>Keys ({vault.keys.length})</h2>
-      <button onClick={() => { const memo = prompt('Memo for this key (optional):') || ''; vault.generateKey(memo); onUpdate() }}>Generate New Key</button>
+    <section style={{ ...sectionStyle }}>
+      <h2 style={{ marginTop: 0 }}>Dashboard</h2>
+      <div>Total balance: <b>{balance.toLocaleString()}</b> sats (<b>{(balance / 100000000).toFixed(8)}</b> BSV)</div>
+      <div style={{ display: 'flex', gap: 24, marginTop: 16, flexWrap: 'wrap' }}>
+        <div style={{ flex: 1, minWidth: 300 }}>
+          <h3>Current UTXOs ({vault.coins.length})</h3>
+          {vault.coins.length === 0 && <div>No spendable coins</div>}
+          {vault.coins.map(c => {
+            const out = c.tx.outputs[c.outputIndex]
+            const id = `${c.tx.id('hex')}:${c.outputIndex}`
+            return (
+              <div key={id} style={{ borderTop: `1px solid ${COLORS.border}`, padding: '8px 0', fontSize: '12px' }}>
+                <div><b>{id}</b> — {out.satoshis?.toLocaleString()} sats (<b>{(out.satoshis as number / 100000000).toFixed(8)}</b> BSV)</div>
+                {c.memo && <div>Memo: {c.memo}</div>}
+              </div>
+            )
+          })}
+        </div>
+        <div style={{ flex: 1, minWidth: 300 }}>
+          <h3>Transaction Log ({vault.transactionLog.length})</h3>
+          {[...vault.transactionLog].reverse().map(t => (
+            <div key={t.txid} style={{ borderTop: `1px solid ${COLORS.border}`, padding: '8px 0', fontSize: '12px' }}>
+              <div><b>{t.txid}</b></div>
+              {t.memo && <div>Memo: {t.memo}</div>}
+              <div style={{ color: t.net >= 0 ? COLORS.green : COLORS.red }}>
+                Net: {t.net.toLocaleString()} sats (<b>{(t.net / 100000000).toFixed(8)}</b> BSV)
+              </div>
+              <label style={{ display: 'inline-flex', gap: 8, alignItems: 'center', marginTop: 4 }}>
+                <input type="checkbox" checked={t.processed} onChange={e => { vault.markProcessed(t.txid, e.target.checked); triggerRerender() }} />
+                Mark processed
+              </label>
+            </div>
+          ))}
+        </div>
+      </div>
+    </section>
+  )
+}
+
+const KeyManager: FC<{ vault: Vault, onUpdate: () => void, notify: (type: Notification['type'], msg: string) => void }> = ({ vault, onUpdate, notify }) => {
+  const dialog = useDialog()
+  return (
+    <section style={{ ...sectionStyle }}>
+      <h2 style={{ marginTop: 0 }}>Keys ({vault.keys.length})</h2>
+      <div style={{ display: 'flex', gap: 12, alignItems: 'center', flexWrap: 'wrap' }}>
+        <button
+          onClick={async () => {
+            const memo = (await dialog.prompt('Memo for this key (optional):', { title: 'Key Memo' })) || ''
+            vault.generateKey(memo); onUpdate()
+          }}
+          style={btnStyle}
+        >
+          Generate New Key
+        </button>
+      </div>
       <div style={{ marginTop: 12 }}>
         {[...vault.keys].reverse().map(k => (
-          <div key={k.serial} style={{ borderTop: '1px solid #eee', padding: '8px 0', display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+          <div key={k.serial} style={{ borderTop: `1px solid ${COLORS.border}`, padding: '8px 0', display: 'flex', justifyContent: 'space-between', alignItems: 'center', gap: 12, flexWrap: 'wrap' }}>
             <div>
-              <b>{k.serial}</b> {k.memo && `— ${k.memo}`} {k.usedOnChain ? <span style={{ color: '#b36' }}> (used)</span> : <span style={{color: 'green'}}>(unused)</span>}
-              <div style={{ fontSize: 12, color: '#666', fontFamily: 'monospace' }}>{k.public.toAddress()}</div>
+              <b>{k.serial}</b> {k.memo && `— ${k.memo}`} {k.usedOnChain ? <span style={{ color: '#b36' }}> (used)</span> : <span style={{color: COLORS.green}}>(unused)</span>}
+              <div style={{ fontSize: 12, color: COLORS.gray600, fontFamily: 'monospace' }}>{k.public.toAddress()}</div>
             </div>
-            <button onClick={() => vault.downloadDepositSlipTxt(k.serial)}>Deposit Slip (.txt)</button>
+            <div style={{ display: 'flex', gap: 8 }}>
+              <button onClick={async () => { await vault.downloadDepositSlipTxt(k.serial); notify('info', `Deposit slip generated for ${k.serial}`) }} style={btnGhostStyle}>
+                Deposit Slip (.txt)
+              </button>
+              <button onClick={() => navigator.clipboard.writeText(k.public.toAddress())} style={btnGhostStyle}>Copy Address</button>
+            </div>
           </div>
         ))}
       </div>
@@ -1045,12 +1258,12 @@ const IncomingManager: FC<{ vault: Vault, onPreview: (p: IncomingPreview) => voi
   }
 
   return (
-    <section style={{ border: '1px solid #ddd', padding: 12, marginBottom: 16 }}>
-      <h2>Process Incoming Atomic BEEF</h2>
-      <p style={{fontSize: 12, color: '#555'}}>Paste an SPV-valid Atomic BEEF transaction to add new UTXOs to your vault.</p>
-      <textarea placeholder="Paste Atomic BEEF hex..." rows={4} style={{ width: '100%' }} value={hex} onChange={e => setHex(e.target.value)} />
+    <section style={{ ...sectionStyle }}>
+      <h2 style={{ marginTop: 0 }}>Process Incoming Atomic BEEF</h2>
+      <p style={{fontSize: 12, color: COLORS.gray600}}>Paste an SPV-valid Atomic BEEF transaction to add new UTXOs to your vault.</p>
+      <textarea placeholder="Paste Atomic BEEF hex..." rows={4} style={{ ...inputStyle, width: '100%', fontFamily: 'monospace' }} value={hex} onChange={e => setHex(e.target.value)} />
       <div style={{ marginTop: 8 }}>
-        <button onClick={handlePreview} disabled={isProcessing}>{isProcessing ? 'Verifying...' : 'Review & Process'}</button>
+        <button onClick={handlePreview} disabled={isProcessing} style={btnStyle}>{isProcessing ? 'Verifying...' : 'Review & Process'}</button>
       </div>
     </section>
   )
@@ -1065,7 +1278,7 @@ const ProcessIncomingModal: FC<{
 }> = ({ vault, preview, onClose, onSuccess, onError }) => {
   const needsConfirmation = vault.confirmIncomingCoins
   const allVouts = preview.matches.map(m => m.outputIndex)
-  const [admit, setAdmit] = useState<Record<number, boolean>>(() => 
+  const [admit, setAdmit] = useState<Record<number, boolean>>(() =>
     needsConfirmation ? {} : Object.fromEntries(allVouts.map(v => [v, true]))
   )
   const [memos, setMemos] = useState<Record<number, string>>({})
@@ -1091,36 +1304,49 @@ const ProcessIncomingModal: FC<{
 
   return (
     <Modal title="Review Incoming Transaction" onClose={onClose}>
-      <p style={{fontSize: 13}}>TXID: <code>{preview.txid}</code></p>
+      <div style={{display:'flex', gap:8, alignItems:'center'}}>
+        <p style={{fontSize: 13, margin: 0}}>TXID: <code>{preview.txid}</code></p>
+        <button onClick={() => navigator.clipboard.writeText(preview.txid)} style={{ ...btnGhostStyle, padding: '6px 10px', fontSize: 12 }}>Copy TXID</button>
+      </div>
       <p style={{fontSize: 13, color: 'green', fontWeight: 'bold'}}>SPV Verified Successfully</p>
       <hr style={{margin: '16px 0'}} />
       <p>The following outputs in this transaction are spendable by your vault's keys. {needsConfirmation ? 'Select which UTXOs to admit:' : 'All matched UTXOs will be admitted automatically.'}</p>
-      
+
       {preview.matches.map(m => (
-        <div key={m.outputIndex} style={{border: '1px solid #eee', padding: 8, margin: '8px 0'}}>
+        <div key={m.outputIndex} style={{border: `1px solid ${COLORS.border}`, padding: 8, margin: '8px 0', borderRadius: 6}}>
           {needsConfirmation && <input type="checkbox" checked={!!admit[m.outputIndex]} onChange={() => handleToggleAdmit(m.outputIndex)} style={{marginRight: 8}} />}
           <strong>Output #{m.outputIndex}</strong>: {m.satoshis.toLocaleString()} sats (<b>{(m.satoshis / 100000000).toFixed(8)}</b> BSV), to Key <strong>{m.serial}</strong>
-          <input 
-            type="text" 
-            placeholder="UTXO Memo (optional)" 
-            style={{width: '100%', marginTop: 4}} 
+          <input
+            type="text"
+            placeholder="UTXO Memo (optional)"
+            style={{...inputStyle, marginTop: 6}}
             value={memos[m.outputIndex] || ''}
             onChange={e => setMemos(prev => ({...prev, [m.outputIndex]: e.target.value}))}
           />
         </div>
       ))}
 
-      <input 
-        type="text" 
-        placeholder="Transaction Memo (optional)" 
-        style={{width: '100%', marginTop: 12}} 
+      <button
+        onClick={() => {
+          const ids = preview.matches.map(m => `${preview.txid}:${m.outputIndex}`).join('\n')
+          navigator.clipboard.writeText(ids)
+        }}
+        style={{ ...btnGhostStyle, marginTop: 6, fontSize: 12 }}
+      >
+        Copy All Matched UTXO IDs
+      </button>
+
+      <input
+        type="text"
+        placeholder="Transaction Memo (optional)"
+        style={{...inputStyle, marginTop: 12}}
         value={txMemo}
         onChange={e => setTxMemo(e.target.value)}
       />
 
       <div style={{marginTop: 16, display: 'flex', justifyContent: 'flex-end', gap: 12}}>
-        <button onClick={onClose} style={{background: '#777'}}>Cancel</button>
-        <button onClick={handleFinalize} disabled={isFinalizing || Object.values(admit).every(v => !v)}>
+        <button onClick={onClose} style={btnGhostStyle}>Cancel</button>
+        <button onClick={handleFinalize} disabled={isFinalizing || Object.values(admit).every(v => !v)} style={btnStyle}>
           {isFinalizing ? 'Saving...' : `Admit ${Object.values(admit).filter(Boolean).length} UTXO(s)`}
         </button>
       </div>
@@ -1128,16 +1354,31 @@ const ProcessIncomingModal: FC<{
   )
 }
 
-const OutgoingBuilder: FC<{ vault: Vault, onUpdate: () => void, notify: (type: Notification['type'], msg: string) => void }> = ({ vault, onUpdate, notify }) => {
-  const [outLines, setOutLines] = useState<string>('')
+/**
+ * -----------------------------------------------------------------------------
+ * Outgoing Wizard (one-step-at-a-time)
+ * -----------------------------------------------------------------------------
+ */
+
+const OutgoingWizard: FC<{ vault: Vault, onUpdate: () => void, notify: (t: Notification['type'], m: string) => void }> = ({ vault, onUpdate, notify }) => {
+  const dialog = useDialog()
+  type Step = 1 | 2 | 3 | 4 | 5
+  const [step, setStep] = useState<Step>(1)
+
+  const [outputsText, setOutputsText] = useState<string>('') // "<address_or_script> <sats> [memo]"
+  const [parsedOutputs, setParsedOutputs] = useState<OutgoingOutputSpec[]>([])
+
   const [manualInputs, setManualInputs] = useState<Record<string, boolean>>({})
   const [changeSerials, setChangeSerials] = useState<Record<string, boolean>>({})
   const [txMemo, setTxMemo] = useState<string>('')
   const [requirePerUtxoAttestation, setRequirePerUtxoAttestation] = useState<boolean>(false)
+
+  const [beefHex, setBeefHex] = useState<string | null>(null)
+  const [beefTxid, setBeefTxid] = useState<string | null>(null)
   const [isBuilding, setIsBuilding] = useState(false)
 
-  function parseOutgoingLines(): OutgoingOutputSpec[] {
-    const lines = outLines.split('\n').map(s => s.trim()).filter(Boolean)
+  function parseOutgoingLines(text: string): OutgoingOutputSpec[] {
+    const lines = text.split('\n').map(s => s.trim()).filter(Boolean)
     return lines.map(line => {
       const parts = line.match(/^(\S+)\s+(\d+)(?:\s+(.*))?$/)
       if (!parts) throw new Error(`Invalid output line format: ${line}`)
@@ -1148,39 +1389,66 @@ const OutgoingBuilder: FC<{ vault: Vault, onUpdate: () => void, notify: (type: N
     })
   }
 
+  function nextFromOutputs() {
+    try {
+      const out = parseOutgoingLines(outputsText)
+      if (!out.length) throw new Error('Enter at least one output.')
+      setParsedOutputs(out)
+      setStep(2)
+    } catch (e: any) {
+      notify('error', e.message || 'Invalid outputs.')
+    }
+  }
+
+  function nextFromInputs() {
+    const selectedIds = Object.entries(manualInputs).filter(([_, on]) => on).map(([id]) => id)
+    if (!selectedIds.length) { notify('error', 'Select at least one input UTXO.'); return }
+    setStep(3)
+  }
+
+  function nextFromChange() {
+    const change = Object.entries(changeSerials).filter(([_, on]) => on).map(([s]) => s)
+    if (!change.length) { notify('error', 'Select at least one change key.'); return }
+    setStep(4)
+  }
+
   async function buildAndSign() {
     setIsBuilding(true)
     try {
-      const outputs = parseOutgoingLines()
       const selectedIds = Object.entries(manualInputs).filter(([_, on]) => on).map(([id]) => id)
       const change = Object.entries(changeSerials).filter(([_, on]) => on).map(([s]) => s)
 
-      const attestationFn: AttestationFn | undefined = (vault.confirmOutgoingCoins && requirePerUtxoAttestation)
-        ? (coin) => new Promise(resolve => {
-            const id = coinId(coin.tx, coin.outputIndex)
-            const ok = window.confirm(`ATTESTATION REQUIRED:\n\nConfirm this UTXO is unspent on the HONEST chain:\n\n${id}\nAmount: ${coin.tx.outputs[coin.outputIndex].satoshis?.toLocaleString()} sats`)
-            resolve(ok)
-          })
-        : undefined
+      const attestationFn: AttestationFn | undefined =
+        (vault.confirmOutgoingCoins && requirePerUtxoAttestation)
+          ? async (coin) => {
+              const id = coinId(coin.tx, coin.outputIndex)
+              return await dialog.confirm(
+                `ATTESTATION REQUIRED:\n\nConfirm this UTXO is unspent on the HONEST chain:\n\n${id}\nAmount: ${coin.tx.outputs[coin.outputIndex].satoshis?.toLocaleString()} sats`,
+                'Per-UTXO Attestation'
+              )
+            }
+          : undefined
 
       const { tx, atomicBEEFHex } = await vault.buildAndSignOutgoing({
-        outputs,
-        inputIds: selectedIds.length ? selectedIds : undefined,
-        strategy: selectionStrategy,
-        changeKeySerials: change.length ? change : undefined,
+        outputs: parsedOutputs,
+        inputIds: selectedIds,
+        changeKeySerials: change,
         perUtxoAttestation: requirePerUtxoAttestation,
         attestationFn,
         txMemo
       })
 
-      const blob = new Blob([atomicBEEFHex], { type: 'text/plain' })
-      const url = URL.createObjectURL(blob)
-      const a = document.createElement('a'); a.href = url; a.download = `tx_${tx.id('hex')}.atomic-beef.txt`; a.click()
-      URL.revokeObjectURL(url)
+      setBeefHex(atomicBEEFHex)
+      setBeefTxid(tx.id('hex') as string)
 
-      setOutLines(''); setManualInputs({}); setTxMemo('');
+      // cleanup & advance
+      setOutputsText('')
+      setManualInputs({})
+      setChangeSerials({})
+      setTxMemo('')
       onUpdate()
-      notify('success', 'Transaction built & signed. Atomic BEEF downloaded. SAVE the vault to persist changes.')
+      notify('success', 'Transaction built & signed. SAVE the vault to persist changes.')
+      setStep(5)
     } catch (e: any) {
       notify('error', e.message || String(e))
     } finally {
@@ -1188,44 +1456,193 @@ const OutgoingBuilder: FC<{ vault: Vault, onUpdate: () => void, notify: (type: N
     }
   }
 
-  return (
-    <section style={{ border: '1px solid #ddd', padding: 12, marginBottom: 16 }}>
-      <h2>Build Outgoing Transaction</h2>
-      <div style={{ marginBottom: 8, color: '#555', fontSize: 12 }}>
-        Enter outputs, one per line: <code>&lt;address_or_script_hex&gt; &lt;satoshis&gt; [optional memo]</code>
-      </div>
-      <textarea rows={4} style={{ width: '100%' }} value={outLines} onChange={e => setOutLines(e.target.value)} placeholder={`1ABC... 546 tip for good work\n76a914...88ac 1000 payment for invoice #123`} />
-      
-      <div style={{ marginTop: 8, display: 'flex', gap: 12, flexWrap: 'wrap', alignItems: 'center' }}>
-        {vault.confirmOutgoingCoins && <label><input type="checkbox" checked={requirePerUtxoAttestation} onChange={e => setRequirePerUtxoAttestation(e.target.checked)} /> Per-UTXO Attestation</label>}
-        <br />
-        <input placeholder="Transaction Memo (optional)" value={txMemo} onChange={e => setTxMemo(e.target.value)} />
-      </div>
+  const StepIndicator = () => (
+    <div style={{ display: 'flex', gap: 8, marginBottom: 12, flexWrap: 'wrap' }}>
+      {[1,2,3,4,5].map(n => (
+        <div key={n} style={{
+          padding: '6px 10px',
+          borderRadius: 999,
+          background: step === n ? COLORS.blue : '#eee',
+          color: step === n ? '#fff' : '#444',
+          fontSize: 12
+        }}>
+          {n}. {n===1?'Outputs':n===2?'Inputs':n===3?'Change':n===4?'Review & Sign':'Result'}
+        </div>
+      ))}
+    </div>
+  )
 
-      <div style={{marginTop: 12}}>
-          <div style={{marginTop: 12, borderTop: '1px dashed #ccc', paddingTop: 12}}>
-            <b>Input Selection</b>
-            {vault.coins.length === 0 && <div>No spendable UTXOs</div>}
-            {vault.coins.map(c => {
-              const id = coinId(c.tx, c.outputIndex)
-              const sats: number = c.tx.outputs[c.outputIndex].satoshis
-              return <div key={id} style={{padding: '4px 0'}}><label>
-                  <input type="checkbox" checked={!!manualInputs[id]} onChange={e => setManualInputs(prev => ({ ...prev, [id]: e.target.checked }))} />
-                   {id} — {sats.toLocaleString()} sats ({(sats / 100000000).toFixed(8)} BSV)
-                </label></div>
-            })}
+  return (
+    <section style={{ ...sectionStyle }}>
+      <h2 style={{ marginTop: 0 }}>Build Outgoing Transaction (Wizard)</h2>
+      <StepIndicator />
+
+      {step === 1 && (
+        <div>
+          <div style={{ marginBottom: 8, color: COLORS.gray600, fontSize: 12 }}>
+            Enter outputs, one per line: <code>&lt;address_or_script_hex&gt; &lt;satoshis&gt; [optional memo]</code>
           </div>
-          <div style={{marginTop: 12, borderTop: '1px dashed #ccc', paddingTop: 12}}>
-            <b>Change Keys</b>
-            {vault.keys.map(k => <div key={k.serial} style={{padding: '4px 0'}}><label>
-                <input type="checkbox" checked={!!changeSerials[k.serial]} onChange={e => setChangeSerials(prev => ({ ...prev, [k.serial]: e.target.checked }))}/>
-                {k.serial} {k.memo && `— ${k.memo}`}
-              </label></div>)}
+          <textarea rows={5} style={{ ...inputStyle, width: '100%', fontFamily: 'monospace' }} value={outputsText} onChange={e => setOutputsText(e.target.value)} placeholder={`1ABC... 546 tip for good work\n76a914...88ac 1000 payment for invoice #123`} />
+          <div style={{ marginTop: 10, display: 'flex', justifyContent: 'flex-end', gap: 8 }}>
+            <button onClick={nextFromOutputs} style={btnStyle}>Next: Select Inputs</button>
           </div>
+        </div>
+      )}
+
+      {step === 2 && (
+        <div>
+          <b>Input Selection</b>
+          {vault.coins.length === 0 && <div style={{ marginTop: 8 }}>No spendable UTXOs</div>}
+          {vault.coins.map(c => {
+            const id = coinId(c.tx, c.outputIndex)
+            const sats: number = c.tx.outputs[c.outputIndex].satoshis
+            return <div key={id} style={{padding: '6px 0'}}><label>
+                <input type="checkbox" checked={!!manualInputs[id]} onChange={e => setManualInputs(prev => ({ ...prev, [id]: e.target.checked }))} />
+                {' '}
+                {id} — {sats.toLocaleString()} sats ({(sats / 100000000).toFixed(8)} BSV)
+              </label></div>
+          })}
+          <div style={{ marginTop: 10, display: 'flex', justifyContent: 'space-between', gap: 8 }}>
+            <button onClick={() => setStep(1)} style={btnGhostStyle}>Back</button>
+            <button onClick={nextFromInputs} style={btnStyle}>Next: Choose Change</button>
+          </div>
+        </div>
+      )}
+
+      {step === 3 && (
+        <div>
+          <b>Change Keys</b>
+          <div style={{ marginTop: 6, color: COLORS.gray600, fontSize: 12 }}>Select at least one key to receive change.</div>
+          {vault.keys.map(k => <div key={k.serial} style={{padding: '6px 0'}}><label>
+              <input type="checkbox" checked={!!changeSerials[k.serial]} onChange={e => setChangeSerials(prev => ({ ...prev, [k.serial]: e.target.checked }))}/>
+              {' '}
+              {k.serial} {k.memo && `— ${k.memo}`} {k.usedOnChain ? <span style={{ color: '#b36' }}> (used)</span> : <span style={{color: COLORS.green}}>(unused)</span>}
+            </label></div>)}
+          <div style={{ marginTop: 12, display: 'flex', alignItems: 'center', gap: 12, flexWrap: 'wrap' }}>
+            {vault.confirmOutgoingCoins && (
+              <label><input type="checkbox" checked={requirePerUtxoAttestation} onChange={e => setRequirePerUtxoAttestation(e.target.checked)} /> {' '}Per-UTXO Attestation</label>
+            )}
+            <input placeholder="Transaction Memo (optional)" value={txMemo} onChange={e => setTxMemo(e.target.value)} style={{ ...inputStyle, maxWidth: 360 }} />
+          </div>
+          <div style={{ marginTop: 10, display: 'flex', justifyContent: 'space-between', gap: 8 }}>
+            <button onClick={() => setStep(2)} style={btnGhostStyle}>Back</button>
+            <button onClick={nextFromChange} style={btnStyle}>Next: Review & Sign</button>
+          </div>
+        </div>
+      )}
+
+      {step === 4 && (
+        <div>
+          <b>Review</b>
+          <div style={{ display: 'flex', gap: 24, marginTop: 8, flexWrap: 'wrap' }}>
+            <div style={{ flex: 1, minWidth: 280 }}>
+              <div style={{ fontWeight: 600 }}>Outputs</div>
+              <div style={{ border: `1px solid ${COLORS.border}`, borderRadius: 6, padding: 8, marginTop: 6, fontFamily: 'monospace', whiteSpace: 'pre-wrap', fontSize: 12 }}>
+                {parsedOutputs.map((o, i) => `${i+1}. ${o.destinationAddressOrScript} ${o.satoshis}${o.memo ? ' ' + o.memo : ''}`).join('\n')}
+              </div>
+            </div>
+            <div style={{ flex: 1, minWidth: 280 }}>
+              <div style={{ fontWeight: 600 }}>Inputs</div>
+              <div style={{ border: `1px solid ${COLORS.border}`, borderRadius: 6, padding: 8, marginTop: 6, fontFamily: 'monospace', whiteSpace: 'pre-wrap', fontSize: 12 }}>
+                {Object.entries(manualInputs).filter(([_, on]) => on).map(([id]) => id).join('\n') || '—'}
+              </div>
+              <div style={{ marginTop: 8, fontSize: 12 }}>
+                Change Keys: <b>{Object.entries(changeSerials).filter(([_, on]) => on).map(([s]) => s).join(', ') || '—'}</b>
+              </div>
+              <div style={{ marginTop: 4, fontSize: 12 }}>
+                Per-UTXO Attestation: <b>{vault.confirmOutgoingCoins ? (requirePerUtxoAttestation ? 'Enabled' : 'Disabled') : 'Policy off'}</b>
+              </div>
+              {txMemo && <div style={{ marginTop: 4, fontSize: 12 }}>Tx Memo: <b>{txMemo}</b></div>}
+            </div>
+          </div>
+
+          <div style={{ marginTop: 12, display: 'flex', justifyContent: 'space-between', gap: 8 }}>
+            <button onClick={() => setStep(3)} style={btnGhostStyle}>Back</button>
+            <button onClick={buildAndSign} disabled={isBuilding} style={btnStyle}>{isBuilding ? 'Building...' : 'Finalize & Sign'}</button>
+          </div>
+        </div>
+      )}
+
+      {step === 5 && (
+        <div>
+          <b>Result</b>
+          {beefHex && beefTxid ? (
+            <SignedBeefModalInline hex={beefHex} txid={beefTxid} />
+          ) : (
+            <div style={{ marginTop: 8 }}>No result to show.</div>
+          )}
+          <div style={{ marginTop: 12, display: 'flex', justifyContent: 'flex-end' }}>
+            <button onClick={() => setStep(1)} style={btnStyle}>Create Another</button>
+          </div>
+        </div>
+      )}
+    </section>
+  )
+}
+
+const SignedBeefModalInline: FC<{ hex: string; txid: string }> = ({ hex, txid }) => {
+  const copy = async () => { await navigator.clipboard.writeText(hex) }
+  const download = () => {
+    const blob = new Blob([hex], { type: 'text/plain' })
+    const url = URL.createObjectURL(blob)
+    const a = document.createElement('a'); a.href = url; a.download = `tx_${txid}.atomic-beef.txt`; a.click()
+    URL.revokeObjectURL(url)
+  }
+  return (
+    <div style={{ border: `1px solid ${COLORS.border}`, borderRadius: 8, padding: 12, marginTop: 8 }}>
+      <p style={{fontSize: 12, margin: 0}}>TXID: <code>{txid}</code></p>
+      <textarea readOnly rows={8} style={{ ...inputStyle, width: '100%', marginTop: 8, fontFamily: 'monospace' }} value={hex} />
+      <div style={{ display: 'flex', justifyContent: 'flex-end', gap: 8, marginTop: 8 }}>
+        <button onClick={copy} style={btnGhostStyle}>Copy</button>
+        <button onClick={download} style={btnStyle}>Download</button>
       </div>
-      
+    </div>
+  )
+}
+
+const SettingsPanel: FC<{ vault: Vault, onUpdate: () => void }> = ({ vault, onUpdate }) => {
+  const [incoming, setIncoming] = useState(vault.confirmIncomingCoins)
+  const [outgoing, setOutgoing] = useState(vault.confirmOutgoingCoins)
+  const [phOld, setPhOld] = useState(String(vault.persistHeadersOlderThanBlocks))
+  const [rvRecent, setRvRecent] = useState(String(vault.reverifyRecentHeadersAfterSeconds))
+  const [rvHeight, setRvHeight] = useState(String(vault.reverifyCurrentBlockHeightAfterSeconds))
+
+  function save() {
+    vault.confirmIncomingCoins = !!incoming
+    vault.confirmOutgoingCoins = !!outgoing
+    vault.persistHeadersOlderThanBlocks = Number(phOld) || vault.persistHeadersOlderThanBlocks
+    vault.reverifyRecentHeadersAfterSeconds = Number(rvRecent) || vault.reverifyRecentHeadersAfterSeconds
+    vault.reverifyCurrentBlockHeightAfterSeconds = Number(rvHeight) || vault.reverifyCurrentBlockHeightAfterSeconds
+    onUpdate()
+  }
+
+  return (
+    <section style={{ ...sectionStyle }}>
+      <h2 style={{ marginTop: 0 }}>Settings</h2>
+      <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 16 }}>
+        <label style={{ display: 'flex', gap: 8, alignItems: 'center' }}>
+          <input type="checkbox" checked={incoming} onChange={e => setIncoming(e.target.checked)} />
+          Require attestation for incoming UTXOs
+        </label>
+        <label style={{ display: 'flex', gap: 8, alignItems: 'center' }}>
+          <input type="checkbox" checked={outgoing} onChange={e => setOutgoing(e.target.checked)} />
+          Require attestation for outgoing UTXOs
+        </label>
+        <div>
+          <div style={{ fontSize: 12, color: COLORS.gray600 }}>Persist headers older than N blocks</div>
+          <input value={phOld} onChange={e => setPhOld(e.target.value)} style={inputStyle} />
+        </div>
+        <div>
+          <div style={{ fontSize: 12, color: COLORS.gray600 }}>Re-verify recent headers after (seconds)</div>
+          <input value={rvRecent} onChange={e => setRvRecent(e.target.value)} style={inputStyle} />
+        </div>
+        <div>
+          <div style={{ fontSize: 12, color: COLORS.gray600 }}>Re-verify current block height after (seconds)</div>
+          <input value={rvHeight} onChange={e => setRvHeight(e.target.value)} style={inputStyle} />
+        </div>
+      </div>
       <div style={{ marginTop: 12 }}>
-        <button onClick={buildAndSign} disabled={isBuilding}>{isBuilding ? 'Building...' : 'Finalize & Sign'}</button>
+        <button onClick={save} style={btnStyle}>Apply</button>
       </div>
     </section>
   )

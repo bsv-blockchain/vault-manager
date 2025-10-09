@@ -29,6 +29,15 @@ root.render(
       pauseOnHover
     />
     <CssBaseline />
+    <style>{`
+      input:-webkit-autofill,
+      textarea:-webkit-autofill,
+      select:-webkit-autofill {
+        -webkit-text-fill-color: #111 !important;
+        transition: background-color 9999s ease-out, color 9999s ease-out;
+      }
+      ::placeholder { color: #888; }
+    `}</style>
     <App />
   </ThemeProvider>
 )
