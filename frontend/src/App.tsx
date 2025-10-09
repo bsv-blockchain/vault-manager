@@ -966,7 +966,7 @@ export default function App () {
       
       <section style={{ border: '1px solid #ddd', padding: 12, marginBottom: 16 }}>
         <h2>Dashboard</h2>
-        <div>Total balance: <b>{balance.toLocaleString()}</b> sats</div>
+        <div>Total balance: <b>{balance.toLocaleString()}</b> sats (<b>{(balance / 100000000).toFixed(8)}</b> BSV)</div>
         <div style={{ display: 'flex', gap: 24, marginTop: 16 }}>
           <div style={{ flex: 1 }}>
             <h3>Current UTXOs ({vault.coins.length})</h3>
@@ -976,7 +976,7 @@ export default function App () {
               const id = `${c.tx.id('hex')}:${c.outputIndex}`
               return (
                 <div key={id} style={{ borderTop: '1px solid #eee', padding: '8px 0', fontSize: '12px' }}>
-                  <div><b>{id}</b> — {out.satoshis?.toLocaleString()} sats</div>
+                  <div><b>{id}</b> — {out.satoshis?.toLocaleString()} sats (<b>{(out.satoshis as number / 100000000).toFixed(8)}</b> BSV)</div>
                   {c.memo && <div>Memo: {c.memo}</div>}
                 </div>
               )
@@ -989,7 +989,7 @@ export default function App () {
                 <div><b>{t.txid}</b></div>
                 {t.memo && <div>Memo: {t.memo}</div>}
                 <div style={{ color: t.net >= 0 ? 'green' : 'red' }}>
-                  Net: {t.net.toLocaleString()} sats
+                  Net: {t.net.toLocaleString()} sats (<b>{(t.net / 100000000).toFixed(8)}</b> BSV)
                 </div>
                 <label>
                   <input type="checkbox" checked={t.processed} onChange={e => { vault.markProcessed(t.txid, e.target.checked); triggerRerender() }} />
@@ -1099,7 +1099,7 @@ const ProcessIncomingModal: FC<{
       {preview.matches.map(m => (
         <div key={m.outputIndex} style={{border: '1px solid #eee', padding: 8, margin: '8px 0'}}>
           {needsConfirmation && <input type="checkbox" checked={!!admit[m.outputIndex]} onChange={() => handleToggleAdmit(m.outputIndex)} style={{marginRight: 8}} />}
-          <strong>Output #{m.outputIndex}</strong>: {m.satoshis.toLocaleString()} sats, to Key <strong>{m.serial}</strong>
+          <strong>Output #{m.outputIndex}</strong>: {m.satoshis.toLocaleString()} sats (<b>{(m.satoshis / 100000000).toFixed(8)}</b> BSV), to Key <strong>{m.serial}</strong>
           <input 
             type="text" 
             placeholder="UTXO Memo (optional)" 
@@ -1133,7 +1133,6 @@ const OutgoingBuilder: FC<{ vault: Vault, onUpdate: () => void, notify: (type: N
   const [manualInputs, setManualInputs] = useState<Record<string, boolean>>({})
   const [changeSerials, setChangeSerials] = useState<Record<string, boolean>>({})
   const [txMemo, setTxMemo] = useState<string>('')
-  const [selectionStrategy, setSelectionStrategy] = useState<AutoInputSelectionStrategy>('largest-first')
   const [requirePerUtxoAttestation, setRequirePerUtxoAttestation] = useState<boolean>(false)
   const [isBuilding, setIsBuilding] = useState(false)
 
@@ -1198,37 +1197,31 @@ const OutgoingBuilder: FC<{ vault: Vault, onUpdate: () => void, notify: (type: N
       <textarea rows={4} style={{ width: '100%' }} value={outLines} onChange={e => setOutLines(e.target.value)} placeholder={`1ABC... 546 tip for good work\n76a914...88ac 1000 payment for invoice #123`} />
       
       <div style={{ marginTop: 8, display: 'flex', gap: 12, flexWrap: 'wrap', alignItems: 'center' }}>
-        <label>Strategy: <select value={selectionStrategy} onChange={e => setSelectionStrategy(e.target.value as AutoInputSelectionStrategy)}>
-          <option value="largest-first">largest-first</option>
-          <option value="smallest-first">smallest-first</option>
-          <option value="oldest-first">oldest-first</option>
-        </select></label>
         {vault.confirmOutgoingCoins && <label><input type="checkbox" checked={requirePerUtxoAttestation} onChange={e => setRequirePerUtxoAttestation(e.target.checked)} /> Per-UTXO Attestation</label>}
+        <br />
         <input placeholder="Transaction Memo (optional)" value={txMemo} onChange={e => setTxMemo(e.target.value)} />
       </div>
 
       <div style={{marginTop: 12}}>
-        <details>
-          <summary>Manual Input & Change Key Selection (Optional)</summary>
           <div style={{marginTop: 12, borderTop: '1px dashed #ccc', paddingTop: 12}}>
-            <b>Input Selection (leave blank for auto)</b>
+            <b>Input Selection</b>
             {vault.coins.length === 0 && <div>No spendable UTXOs</div>}
             {vault.coins.map(c => {
               const id = coinId(c.tx, c.outputIndex)
+              const sats: number = c.tx.outputs[c.outputIndex].satoshis
               return <div key={id} style={{padding: '4px 0'}}><label>
                   <input type="checkbox" checked={!!manualInputs[id]} onChange={e => setManualInputs(prev => ({ ...prev, [id]: e.target.checked }))} />
-                   {id} — {c.tx.outputs[c.outputIndex].satoshis?.toLocaleString()} sats
+                   {id} — {sats.toLocaleString()} sats ({(sats / 100000000).toFixed(8)} BSV)
                 </label></div>
             })}
           </div>
           <div style={{marginTop: 12, borderTop: '1px dashed #ccc', paddingTop: 12}}>
-            <b>Change Keys (leave blank for auto)</b>
+            <b>Change Keys</b>
             {vault.keys.map(k => <div key={k.serial} style={{padding: '4px 0'}}><label>
                 <input type="checkbox" checked={!!changeSerials[k.serial]} onChange={e => setChangeSerials(prev => ({ ...prev, [k.serial]: e.target.checked }))}/>
                 {k.serial} {k.memo && `— ${k.memo}`}
               </label></div>)}
           </div>
-        </details>
       </div>
       
       <div style={{ marginTop: 12 }}>
