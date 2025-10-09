@@ -727,7 +727,7 @@ Instructions:
     debugger
 
     // Fee to miners, change to change outputs
-    tx.fee() // TODO: support custom fees and fee models
+    await tx.fee() // TODO: support custom fees and fee models
 
     // Optional outgoing attestation handled by UI via callback
     if (this.confirmOutgoingCoins && opts.perUtxoAttestation && opts.attestationFn) {
@@ -737,7 +737,7 @@ Instructions:
       }
     }
 
-    tx.sign()
+    await tx.sign()
 
     const txid = tx.id('hex') as string
     const selectedIds = new Set(selected.map(s => coinId(s.tx, s.outputIndex)))
