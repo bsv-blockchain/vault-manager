@@ -1253,7 +1253,6 @@ function AppInner () {
 
           {activeTab === 'outgoing' && (
             <OutgoingWizard
-              key={appKey}
               vault={vault}
               notify={notify}
               onUpdate={forceAppUpdate}
@@ -1631,6 +1630,16 @@ const OutgoingWizard: FC<{ vault: Vault, onUpdate: () => void, notify: (t: Notif
 
       setBeefHex(atomicBEEFHex)
       setBeefTxid(tx.id('hex') as string)
+
+      try {
+        const blob = new Blob([atomicBEEFHex], { type: 'text/plain' })
+        const url = URL.createObjectURL(blob)
+        const a = document.createElement('a')
+        a.href = url
+        a.download = `tx_${tx.id('hex')}.atomic-beef.txt`
+        a.click()
+        URL.revokeObjectURL(url)
+      } catch {}
 
       onUpdate()
       notify('success', 'Transaction built & signed. SAVE the vault to persist changes.')
