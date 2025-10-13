@@ -1,7 +1,7 @@
 import React, { useEffect, useMemo, useState, FC, ReactNode, createContext, useCallback, useContext } from 'react'
 import {
   PrivateKey, P2PKH, Script, Transaction, PublicKey, ChainTracker,
-  Utils, Hash, SymmetricKey, Random, TransactionOutput
+  Utils, Hash, SymmetricKey, Random, TransactionOutput, Beef
 } from '@bsv/sdk'
 
 /**
@@ -34,9 +34,9 @@ const inputStyle: React.CSSProperties = {
   borderRadius: 6,
   padding: '8px 10px',
   width: '100%',
-  background: '#fff',      // ← add
-  color: '#111',           // ← add
-  caretColor: '#111'       // ← add
+  background: '#fff',
+  color: '#111',
+  caretColor: '#111'
 }
 
 const NotificationBanner: FC<{ notification: Notification, onDismiss: () => void }> = ({ notification, onDismiss }) => {
@@ -70,9 +70,8 @@ const Modal: FC<{ title: string, children: ReactNode, onClose: () => void }> = (
       display: 'flex',
       alignItems: 'center',
       justifyContent: 'center',
-      zIndex: 1000 // Ensures it's on top of other content
+      zIndex: 1000
     }}>
-      {/* This is the actual modal panel */}
       <div style={{
         background: 'white',
         color: '#111',
@@ -208,7 +207,7 @@ type KeyRecord = {
 }
 
 type CoinRecord = {
-  tx: Transaction
+  txid: string
   outputIndex: number
   memo: string
   keySerial: string
@@ -216,11 +215,10 @@ type CoinRecord = {
 
 type TxLogRecord = {
   at: UnixMs
-  atomicBEEF: number[]
-  net: number // positive=in, negative=out
+  txid: string
+  net: number // positive=in, negative=out (includes fee)
   memo: string
   processed: boolean
-  txid: string
 }
 
 type PersistedHeaderClaim = {
@@ -264,22 +262,25 @@ type BuildOutgoingOptions = {
   outputs: OutgoingOutputSpec[]
   inputIds?: string[]          // REQUIRED now (enforced)
   changeKeySerials?: string[]  // REQUIRED now (enforced)
-  /**
-   * If true and policy requires outgoing attestation, the provided `attestationFn`
-   * will be called for each input UTXO.
-   */
   perUtxoAttestation?: boolean
   attestationFn?: AttestationFn
   txMemo?: string
 }
 
 /** Format a txid:outputIndex pair */
-function coinId (tx: Transaction, outputIndex: number): string {
-  return `${tx.id('hex')}:${outputIndex}`
+function coinIdStr (txid: string, outputIndex: number): string {
+  return `${txid}:${outputIndex}`
 }
 
 function assert (cond: any, msg: string): asserts cond {
   if (!cond) throw new Error(msg)
+}
+
+/** Helper to get a TX from a vault's BEEF store (throws if missing). */
+function getTxFromStore (beefStore: Beef, txid: string): Transaction {
+  const bin = beefStore.toBinary()
+  const tx = Transaction.fromBEEF(bin, txid) // throws if not found
+  return tx
 }
 
 /**
@@ -287,7 +288,7 @@ function assert (cond: any, msg: string): asserts cond {
  * Vault class
  * - Implements ChainTracker.
  * - Holds derived encryption key (NOT the password).
- * - Non-interactive APIs; all secure UX via UiBridge.
+ * - Maintains a global vault-wide BEEF store.
  * =============================================================================
  */
 
@@ -306,6 +307,9 @@ class Vault implements ChainTracker {
   vaultRevision = 1
   created: UnixMs = Date.now()
   lastUpdated: UnixMs = Date.now()
+
+  /** Global transaction store */
+  beefStore: Beef = new Beef()
 
   /** Keys & coins */
   keys: KeyRecord[] = []
@@ -487,7 +491,6 @@ class Vault implements ChainTracker {
       }
     } while (decrypted.length === 0)
 
-    // Deserialize plaintext payload
     v.deserializePlaintext(decrypted)
     v.logSession('vault.load.ok')
     return v
@@ -556,11 +559,10 @@ class Vault implements ChainTracker {
       const memoBytes = Utils.toArray(k.memo || ''); w.writeVarIntNum(memoBytes.length); w.write(memoBytes)
     }
 
-    // coins
+    // coins (txid, vout, memo, keySerial)
     w.writeVarIntNum(this.coins.length)
     for (const c of this.coins) {
-      const beef = c.tx.toAtomicBEEF() as number[]
-      w.writeVarIntNum(beef.length); w.write(beef)
+      const txidBytes = Utils.toArray(c.txid, 'hex'); w.write(txidBytes)
       w.writeVarIntNum(c.outputIndex)
       const memoBytes = Utils.toArray(c.memo || ''); w.writeVarIntNum(memoBytes.length); w.write(memoBytes)
       const serBytes = Utils.toArray(c.keySerial); w.writeVarIntNum(serBytes.length); w.write(serBytes)
@@ -570,7 +572,7 @@ class Vault implements ChainTracker {
     w.writeVarIntNum(this.transactionLog.length)
     for (const t of this.transactionLog) {
       w.writeVarIntNum(t.at)
-      w.writeVarIntNum(t.atomicBEEF.length); w.write(t.atomicBEEF)
+      const txidBytes = Utils.toArray(t.txid, 'hex'); w.write(txidBytes)
       w.writeVarIntNum(t.net)
       const memoBytes = Utils.toArray(t.memo || ''); w.writeVarIntNum(memoBytes.length); w.write(memoBytes)
       w.writeVarIntNum(t.processed ? 1 : 0)
@@ -600,6 +602,11 @@ class Vault implements ChainTracker {
       const memo = Utils.toArray(ph.memo || ''); w.writeVarIntNum(memo.length); w.write(memo)
     }
 
+    // global beef store (binary)
+    const beefBin = this.beefStore.toBinary()
+    w.writeVarIntNum(beefBin.length)
+    w.write(beefBin)
+
     return w.toArray() as number[]
   }
 
@@ -626,28 +633,25 @@ class Vault implements ChainTracker {
     // coins
     const nCoins = d.readVarIntNum(); this.coins = []
     for (let i = 0; i < nCoins; i++) {
-      const txLen = d.readVarIntNum()
-      const tx = Transaction.fromAtomicBEEF(d.read(txLen))
+      const txid = Utils.toHex(d.read(32))
       const outputIndex = d.readVarIntNum()
       const memoLen = d.readVarIntNum()
       const memo = Utils.toUTF8(d.read(memoLen))
       const ksLen = d.readVarIntNum()
       const keySerial = Utils.toUTF8(d.read(ksLen))
-      this.coins.push({ tx, outputIndex, memo, keySerial })
+      this.coins.push({ txid, outputIndex, memo, keySerial })
     }
 
-    // txs
+    // tx log
     const nTx = d.readVarIntNum(); this.transactionLog = []
     for (let i = 0; i < nTx; i++) {
       const at = d.readVarIntNum()
-      const txLen = d.readVarIntNum()
-      const atomicBEEF = d.read(txLen)
+      const txid = Utils.toHex(d.read(32))
       const net = d.readVarIntNum()
       const memoLen = d.readVarIntNum()
       const memo = Utils.toUTF8(d.read(memoLen))
-      const txid = Transaction.fromAtomicBEEF(atomicBEEF).id('hex')
       const processed = d.readVarIntNum() !== 0
-      this.transactionLog.push({ at, atomicBEEF, net, memo, processed, txid })
+      this.transactionLog.push({ at, txid, net, memo, processed })
     }
 
     // vault log
@@ -679,6 +683,11 @@ class Vault implements ChainTracker {
       const memo = Utils.toUTF8(d.read(memoLen))
       this.persistedHeaderClaims.push({ at, merkleRoot, height, memo })
     }
+
+    // global beef store
+    const beefLen = d.readVarIntNum()
+    const beefBin = d.read(beefLen)
+    this.beefStore = beefLen > 0 ? Beef.fromBinary(beefBin) : new Beef()
 
     this.logSession('vault.deserialize.ok')
   }
@@ -795,16 +804,20 @@ Instructions:
         throw new Error('No outputs were selected to be admitted into the vault.')
     }
 
+    // Merge the incoming Atomic BEEF graph into the global store
+    // We convert the verified transaction back to a BEEF to ensure all dependencies & BUMPs are preserved.
+    this.beefStore.mergeBeef(tx.toBEEF())
+    this.logVault('incoming.merge', `txid=${txid} depsMerged=1`)
+
     // Update coin set & mark key usage
     for (const m of admitted) {
-      this.coins.push({ tx, outputIndex: m.outputIndex, memo: opts.perUtxoMemo?.[m.outputIndex] || '', keySerial: m.serial })
+      this.coins.push({ txid, outputIndex: m.outputIndex, memo: opts.perUtxoMemo?.[m.outputIndex] || '', keySerial: m.serial })
       const k = this.keys.find(kk => kk.serial === m.serial); if (k) k.usedOnChain = true
     }
 
-    const atomic = tx.toAtomicBEEF() as number[]
     const netIn = admitted.reduce((n, a) => n + a.satoshis, 0)
     this.transactionLog.push({
-      at: Date.now(), atomicBEEF: atomic, net: netIn, memo: opts?.txMemo || '', processed: false, txid
+      at: Date.now(), txid, net: netIn, memo: opts?.txMemo || '', processed: false
     })
     this.logVault('incoming.accepted', `${txid}:${admitted.map(a => a.outputIndex).join(',')}`)
     return { admitted: admitted.map(a => `${txid}:${a.outputIndex}`), txid }
@@ -848,7 +861,7 @@ Instructions:
 
     // REQUIRE explicit inputs
     assert(opts.inputIds && opts.inputIds.length > 0, 'You must manually select at least one input UTXO.')
-    const byId = new Map(this.coins.map(c => [coinId(c.tx, c.outputIndex), c] as const))
+    const byId = new Map(this.coins.map(c => [coinIdStr(c.txid, c.outputIndex), c] as const))
     const selected = opts.inputIds.map(id => {
       const c = byId.get(id); if (!c) throw new Error(`Input not found: ${id}`); return c
     })
@@ -862,9 +875,11 @@ Instructions:
       idxToKeySerial.set(tx.outputs.length - 1, k.serial)
     }
 
+    // Hydrate inputs from global BEEF store (ensures merkle paths & ancestry are wired)
     for (const s of selected) {
+      const srcTx = getTxFromStore(this.beefStore, s.txid)
       tx.addInput({
-        sourceTransaction: s.tx,
+        sourceTransaction: srcTx,
         sourceOutputIndex: s.outputIndex,
         unlockingScriptTemplate: new P2PKH().unlock(this.keys.find(x => x.serial === s.keySerial)!.private)
       })
@@ -877,25 +892,34 @@ Instructions:
     if (this.confirmOutgoingCoins && opts.perUtxoAttestation && opts.attestationFn) {
       for (const s of selected) {
         const ok = await opts.attestationFn(s)
-        if (!ok) throw new Error(`Outgoing attestation declined for ${coinId(s.tx, s.outputIndex)}.`)
+        if (!ok) throw new Error(`Outgoing attestation declined for ${coinIdStr(s.txid, s.outputIndex)}.`)
       }
     }
 
     await tx.sign()
 
     const txid = tx.id('hex') as string
-    const selectedIds = new Set(selected.map(s => coinId(s.tx, s.outputIndex)))
-    this.coins = this.coins.filter(c => !selectedIds.has(coinId(c.tx, c.outputIndex)))
+    const selectedIds = new Set(selected.map(s => coinIdStr(s.txid, s.outputIndex)))
+    // Remove spent coins
+    this.coins = this.coins.filter(c => !selectedIds.has(coinIdStr(c.txid, c.outputIndex)))
+
+    // Merge the new outgoing tx graph into the store
+    this.beefStore.mergeBeef(tx.toBEEF())
+    this.logVault('outgoing.merge', `txid=${txid}`)
 
     const changeIds: string[] = []
     tx.outputs.forEach((out: TransactionOutput, outputIndex: number) => {
       if (!out.change) return
       const ser = idxToKeySerial.get(outputIndex) as string
-      this.coins.push({ tx, outputIndex, memo: 'change', keySerial: ser })
+      this.coins.push({ txid, outputIndex, memo: 'change', keySerial: ser })
       changeIds.push(`${txid}:${outputIndex}`)
     })
 
-    const totalInputs = selected.reduce((a, e) => a + (e.tx.outputs[e.outputIndex].satoshis!), 0)
+    // Compute net effect (inputs - outputs - fee)
+    const totalInputs = selected.reduce((a, e) => {
+      const src = getTxFromStore(this.beefStore, e.txid)
+      return a + (src.outputs[e.outputIndex].satoshis!)
+    }, 0)
     const changeBack = tx.outputs.reduce((a, o) => a + (o.change ? (o.satoshis as number) : 0), 0)
     const external = tx.outputs.reduce((a, o) => a + (!o.change ? (o.satoshis as number) : 0), 0)
     const fee = totalInputs - (changeBack + external)
@@ -903,7 +927,7 @@ Instructions:
 
     const atomic = Utils.toHex(tx.toAtomicBEEF() as number[])
     this.transactionLog.push({
-      at: Date.now(), atomicBEEF: tx.toAtomicBEEF() as number[], net, memo: opts.txMemo || '', processed: false, txid
+      at: Date.now(), txid, net, memo: opts.txMemo || '', processed: false
     })
 
     this.logVault('outgoing.signed', `txid=${txid} inputs=${selected.length} change=${changeIds.length} fee=${fee}`)
@@ -1003,7 +1027,6 @@ function AppInner () {
     }
   }
 
-  // A clean way to trigger a re-render after mutating the vault instance.
   function triggerRerender () {
     if (!vault) return
     setVault(Object.assign(Object.create(Object.getPrototypeOf(vault)), vault))
@@ -1017,8 +1040,18 @@ function AppInner () {
 
   const balance = useMemo(() => {
     if (!vault) return 0
-    return vault.coins.reduce((n, c) => n + (c.tx.outputs[c.outputIndex].satoshis as number), 0)
-  }, [vault?.coins])
+    let sum = 0
+    for (const c of vault.coins) {
+      try {
+        const tx = getTxFromStore(vault.beefStore, c.txid)
+        sum += tx.outputs[c.outputIndex].satoshis as number
+      } catch {
+        // If a tx is missing (shouldn't happen), treat as 0 and surface in logs
+        vault['logSession']?.('balance.missing.tx', c.txid)
+      }
+    }
+    return sum
+  }, [vault?.coins, vault?.beefStore])
 
   // --- Loading / Unloaded State ---
   if (isLoading) {
@@ -1173,11 +1206,15 @@ const DashboardPanel: FC<{ vault: Vault, balance: number, triggerRerender: () =>
           <h3>Current UTXOs ({vault.coins.length})</h3>
           {vault.coins.length === 0 && <div>No spendable coins</div>}
           {vault.coins.map(c => {
-            const out = c.tx.outputs[c.outputIndex]
-            const id = `${c.tx.id('hex')}:${c.outputIndex}`
+            const id = `${c.txid}:${c.outputIndex}`
+            let sats = 0
+            try {
+              const tx = getTxFromStore(vault.beefStore, c.txid)
+              sats = tx.outputs[c.outputIndex].satoshis as number
+            } catch {}
             return (
               <div key={id} style={{ borderTop: `1px solid ${COLORS.border}`, padding: '8px 0', fontSize: '12px' }}>
-                <div><b>{id}</b> — {out.satoshis?.toLocaleString()} sats (<b>{(out.satoshis as number / 100000000).toFixed(8)}</b> BSV)</div>
+                <div><b>{id}</b> — {sats.toLocaleString()} sats (<b>{(sats / 100000000).toFixed(8)}</b> BSV)</div>
                 {c.memo && <div>Memo: {c.memo}</div>}
               </div>
             )
@@ -1186,7 +1223,7 @@ const DashboardPanel: FC<{ vault: Vault, balance: number, triggerRerender: () =>
         <div style={{ flex: 1, minWidth: 300 }}>
           <h3>Transaction Log ({vault.transactionLog.length})</h3>
           {[...vault.transactionLog].reverse().map(t => (
-            <div key={t.txid} style={{ borderTop: `1px solid ${COLORS.border}`, padding: '8px 0', fontSize: '12px' }}>
+            <div key={t.at + t.txid} style={{ borderTop: `1px solid ${COLORS.border}`, padding: '8px 0', fontSize: '12px' }}>
               <div><b>{t.txid}</b></div>
               {t.memo && <div>Memo: {t.memo}</div>}
               <div style={{ color: t.net >= 0 ? COLORS.green : COLORS.red }}>
@@ -1421,9 +1458,9 @@ const OutgoingWizard: FC<{ vault: Vault, onUpdate: () => void, notify: (t: Notif
       const attestationFn: AttestationFn | undefined =
         (vault.confirmOutgoingCoins && requirePerUtxoAttestation)
           ? async (coin) => {
-              const id = coinId(coin.tx, coin.outputIndex)
+              const id = `${coin.txid}:${coin.outputIndex}`
               return await dialog.confirm(
-                `ATTESTATION REQUIRED:\n\nConfirm this UTXO is unspent on the HONEST chain:\n\n${id}\nAmount: ${coin.tx.outputs[coin.outputIndex].satoshis?.toLocaleString()} sats`,
+                `ATTESTATION REQUIRED:\n\nConfirm this UTXO is unspent on the HONEST chain:\n\n${id}`,
                 'Per-UTXO Attestation'
               )
             }
@@ -1494,8 +1531,12 @@ const OutgoingWizard: FC<{ vault: Vault, onUpdate: () => void, notify: (t: Notif
           <b>Input Selection</b>
           {vault.coins.length === 0 && <div style={{ marginTop: 8 }}>No spendable UTXOs</div>}
           {vault.coins.map(c => {
-            const id = coinId(c.tx, c.outputIndex)
-            const sats: number = c.tx.outputs[c.outputIndex].satoshis
+            const id = `${c.txid}:${c.outputIndex}`
+            let sats = 0
+            try {
+              const tx = getTxFromStore(vault.beefStore, c.txid)
+              sats = tx.outputs[c.outputIndex].satoshis as number
+            } catch {}
             return <div key={id} style={{padding: '6px 0'}}><label>
                 <input type="checkbox" checked={!!manualInputs[id]} onChange={e => setManualInputs(prev => ({ ...prev, [id]: e.target.checked }))} />
                 {' '}
