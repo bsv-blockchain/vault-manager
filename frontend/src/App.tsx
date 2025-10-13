@@ -1155,6 +1155,12 @@ function AppInner () {
               </div>
             </section>
             <p style={{ color: COLORS.gray600, marginTop: 12 }}>Open an existing vault or create a new one.</p>
+            <h1>Ty Everett begs you...</h1>
+            <p>Please wait for the official release before using this.</p>
+            <p>Please only use this in accordance with the Vault Operator's Manual.</p>
+            <p>Please wait for an external audit to be provided on the version you are using.</p>
+            <p>Please hire a vault operator who has undergone the industry standard training before they manage your funds using this system.</p>
+            <p>Please only broadcast and process transactions you have inspected in multiple external tools so that you are confident the results will be consistent with your intentions and expectations.</p>
           </div>
         </div>
       </div>
