@@ -383,7 +383,7 @@ class Vault implements ChainTracker {
   private logSession (event: string, data?: string) {
     this.sessionLog.push({ at: Date.now(), event, data })
   }
-  private logVault (event: string, data?: string) {
+  logVault (event: string, data?: string) {
     this.vaultLog.push({ at: Date.now(), event, data })
   }
   private logKV (scope: 'session' | 'vault', key: string, value: string) {
@@ -496,6 +496,7 @@ class Vault implements ChainTracker {
     if (heightSec && /^\d+$/.test(heightSec)) v.reverifyCurrentBlockHeightAfterSeconds = Number(heightSec)
 
     v.logSession('wizard.complete', 'create')
+    await v.currentHeight() // Prompt for initial block height
     return v
   }
 
@@ -536,11 +537,12 @@ class Vault implements ChainTracker {
 
     v.deserializePlaintext(decrypted)
     v.logSession('vault.load.ok')
+    await v.currentHeight() // Prompt for block height on load
     return v
   }
 
   /** Deterministic plaintext hash (for “unsaved changes” banner). */
-  computePlaintextHashHex (): string {
+  computePlaintextHash (): string {
     const pt = this.serializePlaintext()
     return Utils.toHex(Hash.sha256(pt))
   }
@@ -567,7 +569,7 @@ class Vault implements ChainTracker {
     return bytes
   }
 
-  async downloadVaultFile (): Promise<void> {
+  async downloadVaultFileAndCertify (): Promise<boolean> {
     const bytes = await this.saveToFileBytes()
     const hashHex = Utils.toHex(Hash.sha256(bytes))
     const blob = new Blob([new Uint8Array(bytes)], { type: 'application/octet-stream' })
@@ -577,9 +579,20 @@ class Vault implements ChainTracker {
     a.download = `${this.vaultName.replace(/\s+/g, '_')}_rev${this.vaultRevision}_${Date.now()}.vaultfile`
     a.click()
     URL.revokeObjectURL(url)
-    const msg = `Vault file downloaded.\n\nRevision: ${this.vaultRevision}\nSHA-256 (hex):\n${hashHex}\n\nVerify and store this new file safely. Securely delete any old vault versions.`
-    await this.ui.alert(msg, 'Vault Saved')
-  }
+
+    // Performative Certification Flow
+    const cert1 = await this.ui.confirm('Do you certify that the new vault has been properly saved or copied into secure long-term storage?', 'Step 1: Confirm Safe Storage')
+    if (!cert1) return false
+
+    const cert2 = await this.ui.confirm(`The SHA-256 hash of the new vault is:\n\n${hashHex}\n\nDo you certify that you will save this hash and confirm it when the vault is next loaded to ensure it has not been tampered with?`, 'Step 2: Confirm Hash Verification')
+    if (!cert2) return false
+
+    const cert3 = await this.ui.confirm(`The current revision is #${this.vaultRevision}. All old vault revisions are now invalid and will not work.\n\nDo you certify that you have securely deleted all previous revisions and will only use the new one in the future?`, 'Step 3: Confirm Deletion of Old Revisions')
+    if (!cert3) return false
+    
+    await this.ui.alert('Vault saved and certified successfully. You will now be logged out for security.', 'Save Complete')
+    return true
+}
 
   // -------------------------------------------------------------------------
   // Serialization (plaintext only; strictly deterministic)
@@ -978,20 +991,31 @@ Instructions:
   }
 
   // -------------------------------------------------------------------------
-  // Session Log export (sanitized)
+  // Log Export
   // -------------------------------------------------------------------------
-  exportSessionLog (): void {
-    const redacted: AuditEvent[] = this.sessionLog.map(e => ({ at: e.at, event: e.event, data: e.data }))
-    const blob = new Blob([`
+  private exportLog (log: AuditEvent[], type: 'session' | 'vault'): void {
+    const content = `
 Vault: ${this.vaultName}, rev: ${this.vaultRevision}
-Created: ${this.created}, Updated: ${this.lastUpdated}
-Session Log:
+Created: ${new Date(this.created).toISOString()}, Updated: ${new Date(this.lastUpdated).toISOString()}
+${type === 'session' ? 'Session' : 'Vault'} Log Exported At: ${new Date().toISOString()}
 -----
-${redacted.map(x => `[${x.at}]: ${x.event}, ${x.data}`)}
-`], { type: 'text/plain' })
+${log.map(x => `[${new Date(x.at).toISOString()}]: ${x.event}${x.data ? `: ${x.data}`: ''}`).join('\n')}
+`
+    const blob = new Blob([content.trim()], { type: 'text/plain' })
     const url = URL.createObjectURL(blob)
-    const a = document.createElement('a'); a.href = url; a.download = `vault_session_${Date.now()}.txt`; a.click()
+    const a = document.createElement('a');
+    a.href = url;
+    a.download = `vault_${type}_log_${Date.now()}.txt`;
+    a.click()
     URL.revokeObjectURL(url)
+  }
+
+  exportSessionLog (): void {
+    this.exportLog(this.sessionLog, 'session')
+  }
+
+  exportVaultLog (): void {
+    this.exportLog(this.vaultLog, 'vault')
   }
 }
 
@@ -1001,7 +1025,7 @@ ${redacted.map(x => `[${x.at}]: ${x.event}, ${x.data}`)}
  * =============================================================================
  */
 
-type TabKey = 'keys' | 'incoming' | 'outgoing' | 'dashboard' | 'settings'
+type TabKey = 'keys' | 'incoming' | 'outgoing' | 'dashboard' | 'settings' | 'logs'
 
 export default function App () {
   return (
@@ -1020,6 +1044,16 @@ function AppInner () {
   const [incomingPreview, setIncomingPreview] = useState<IncomingPreview | null>(null)
   const [isLoading, setIsLoading] = useState(false)
   const [activeTab, setActiveTab] = useState<TabKey>('dashboard')
+  const [appKey, setAppKey] = useState(0) // Used to force re-render of components
+
+  const forceAppUpdate = useCallback(() => {
+    if (vault) {
+      // This creates a new object reference, forcing React to re-render consumers of the vault prop
+      setVault(Object.assign(Object.create(Object.getPrototypeOf(vault)), vault))
+      setAppKey(k => k + 1)
+    }
+  }, [vault])
+
 
   function notify(type: Notification['type'], message: string) {
     setNotification({ type, message, id: Date.now() })
@@ -1032,7 +1066,7 @@ function AppInner () {
       const buf = new Uint8Array(await file.arrayBuffer())
       const v = await Vault.loadFromFile(dialog, Array.from(buf))
       setVault(v)
-      setLastSavedPlainHash(v.computePlaintextHashHex())
+      setLastSavedPlainHash(v.computePlaintextHash())
       notify('success', 'Vault loaded successfully.')
     } catch (e: any) {
       notify('error', e.message || 'Failed to load vault.')
@@ -1046,7 +1080,7 @@ function AppInner () {
     try {
       const v = await Vault.create(dialog)
       setVault(v)
-      setLastSavedPlainHash(v.computePlaintextHashHex())
+      setLastSavedPlainHash(v.computePlaintextHash())
       notify('info', 'New vault created. Generate a key to begin.')
       setActiveTab('keys')
     } catch (e: any) {
@@ -1060,9 +1094,15 @@ function AppInner () {
     if (!vault) return
     setIsLoading(true);
     try {
-      await vault.downloadVaultFile()
-      setLastSavedPlainHash(vault.computePlaintextHashHex())
-      triggerRerender() // To update revision number in UI
+      const certified = await vault.downloadVaultFileAndCertify()
+      if (certified) {
+        // Post-save "logout"
+        setVault(null)
+        setLastSavedPlainHash(null)
+        setActiveTab('dashboard')
+      } else {
+        notify('error', 'Save certification was cancelled. The process was not finished. You must properly perform all steps.')
+      }
     } catch (e: any) {
       notify('error', e.message || 'Failed to save vault.')
     } finally {
@@ -1070,16 +1110,11 @@ function AppInner () {
     }
   }
 
-  function triggerRerender () {
-    if (!vault) return
-    setVault(Object.assign(Object.create(Object.getPrototypeOf(vault)), vault))
-  }
-
   // --- Derived State ---
   const dirty = useMemo(() => {
     if (!vault || !lastSavedPlainHash) return false
-    return vault.computePlaintextHashHex() !== lastSavedPlainHash
-  }, [vault, lastSavedPlainHash])
+    return vault.computePlaintextHash() !== lastSavedPlainHash
+  }, [vault, lastSavedPlainHash, appKey])
 
   const balance = useMemo(() => {
     if (!vault) return 0
@@ -1094,7 +1129,7 @@ function AppInner () {
       }
     }
     return sum
-  }, [vault?.coins, vault?.beefStore])
+  }, [vault?.coins, vault?.beefStore, appKey])
 
   // --- Loading / Unloaded State ---
   if (isLoading) {
@@ -1132,6 +1167,7 @@ function AppInner () {
     { key: 'keys', label: 'Keys' },
     { key: 'incoming', label: 'Incoming' },
     { key: 'outgoing', label: 'Outgoing' },
+    { key: 'logs', label: 'Logs' },
     { key: 'settings', label: 'Settings' }
   ]
 
@@ -1147,7 +1183,7 @@ function AppInner () {
             onClose={() => setIncomingPreview(null)}
             onSuccess={(txid) => {
               setIncomingPreview(null)
-              triggerRerender()
+              forceAppUpdate()
               notify('success', `Transaction ${txid} processed. SAVE the vault to persist changes.`)
             }}
             onError={(err) => notify('error', err)}
@@ -1171,7 +1207,6 @@ function AppInner () {
             <div style={{ display: 'flex', gap: 12, alignItems: 'center', flexWrap: 'wrap' }}>
               <input type="file" accept=".vaultfile,application/octet-stream" onChange={e => e.target.files && onOpenVault(e.target.files[0])} />
               <button onClick={onSaveVault} style={btnStyle}>Save Vault</button>
-              <button onClick={() => { vault.exportSessionLog() }} style={btnGhostStyle}>Export Session Log</button>
             </div>
           </header>
 
@@ -1197,13 +1232,13 @@ function AppInner () {
 
           {/* Active Tab Panels */}
           {activeTab === 'dashboard' && (
-            <DashboardPanel vault={vault} balance={balance} triggerRerender={triggerRerender} />
+            <DashboardPanel vault={vault} balance={balance} triggerRerender={forceAppUpdate} />
           )}
 
           {activeTab === 'keys' && (
             <KeyManager
               vault={vault}
-              onUpdate={triggerRerender}
+              onUpdate={forceAppUpdate}
               notify={notify}
             />
           )}
@@ -1218,14 +1253,19 @@ function AppInner () {
 
           {activeTab === 'outgoing' && (
             <OutgoingWizard
+              key={appKey}
               vault={vault}
               notify={notify}
-              onUpdate={triggerRerender}
+              onUpdate={forceAppUpdate}
             />
           )}
 
+          {activeTab === 'logs' && (
+            <LogsPanel vault={vault} onUpdate={forceAppUpdate} />
+          )}
+
           {activeTab === 'settings' && (
-            <SettingsPanel vault={vault} onUpdate={triggerRerender} />
+            <SettingsPanel vault={vault} onUpdate={forceAppUpdate} />
           )}
         </div>
       </div>
@@ -1487,6 +1527,26 @@ const OutgoingWizard: FC<{ vault: Vault, onUpdate: () => void, notify: (t: Notif
     setBeefTxid(null)
   }
 
+  const totalOutputSats = useMemo(() => {
+    return parsedOutputs.reduce((sum, o) => sum + o.satoshis, 0)
+  }, [parsedOutputs])
+
+  const totalInputSats = useMemo(() => {
+    const selectedIds = Object.keys(manualInputs).filter(id => manualInputs[id])
+    let sum = 0
+    for (const id of selectedIds) {
+      const [txid, voutStr] = id.split(':')
+      const coin = vault.coins.find(c => c.txid === txid && c.outputIndex === Number(voutStr))
+      if (coin) {
+        try {
+          const tx = getTxFromStore(vault.beefStore, coin.txid)
+          sum += tx.outputs[coin.outputIndex].satoshis as number
+        } catch {}
+      }
+    }
+    return sum
+  }, [manualInputs, vault.coins, vault.beefStore])
+
   function nextFromOutputs() {
     try {
       const specs: OutgoingOutputSpec[] = []
@@ -1523,6 +1583,9 @@ const OutgoingWizard: FC<{ vault: Vault, onUpdate: () => void, notify: (t: Notif
   function nextFromInputs() {
     const selectedIds = Object.keys(manualInputs).filter(id => manualInputs[id])
     if (!selectedIds.length) { notify('error', 'Select at least one input UTXO.'); return }
+    if (totalInputSats < totalOutputSats) {
+        notify('error', `Selected inputs (${totalInputSats.toLocaleString()} sats) do not cover the required output amount (${totalOutputSats.toLocaleString()} sats).`); return
+    }
     setStep(3)
   }
 
@@ -1530,6 +1593,14 @@ const OutgoingWizard: FC<{ vault: Vault, onUpdate: () => void, notify: (t: Notif
     const change = Object.keys(changeSerials).filter(s => changeSerials[s])
     if (!change.length) { notify('error', 'Select at least one change key.'); return }
     setStep(4)
+  }
+
+  async function handleGenerateNewChangeKey() {
+    const memo = await dialog.prompt('Enter a memo for the new change key:', { title: 'New Key' })
+    if (memo === null) return // User cancelled
+    vault.generateKey(memo || '')
+    onUpdate() // This will cause the component to get the new key list
+    notify('success', 'New key generated and added to the list.')
   }
 
   async function buildAndSign() {
@@ -1563,6 +1634,7 @@ const OutgoingWizard: FC<{ vault: Vault, onUpdate: () => void, notify: (t: Notif
 
       onUpdate()
       notify('success', 'Transaction built & signed. SAVE the vault to persist changes.')
+      await dialog.alert('Transaction created. Once you broadcast it, please go to the Dashboard and mark it as "processed".', 'Broadcast Reminder')
       setStep(5)
     } catch (e: any) {
       notify('error', e.message || String(e))
@@ -1639,6 +1711,17 @@ const OutgoingWizard: FC<{ vault: Vault, onUpdate: () => void, notify: (t: Notif
       {step === 2 && (
         <div>
           <b>Input Selection</b>
+          <div style={{
+            background: '#eee', padding: '8px 12px', borderRadius: 6, marginTop: 8,
+            borderLeft: `4px solid ${totalInputSats >= totalOutputSats ? COLORS.green : COLORS.red}`
+          }}>
+            <div>Required for outputs: <b>{totalOutputSats.toLocaleString()} sats</b></div>
+            <div>Selected from inputs: <b style={{ color: totalInputSats >= totalOutputSats ? COLORS.green : COLORS.red }}>{totalInputSats.toLocaleString()} sats</b></div>
+            {totalInputSats < totalOutputSats && <div style={{ fontSize: 12, color: COLORS.red, marginTop: 4 }}>
+                You need to select at least {(totalOutputSats - totalInputSats).toLocaleString()} more sats.
+            </div>}
+          </div>
+
           {vault.coins.length === 0 && <div style={{ marginTop: 8 }}>No spendable UTXOs</div>}
           {vault.coins.map(c => {
             const id = `${c.txid}:${c.outputIndex}`
@@ -1662,8 +1745,14 @@ const OutgoingWizard: FC<{ vault: Vault, onUpdate: () => void, notify: (t: Notif
 
       {step === 3 && (
         <div>
-          <b>Change Keys</b>
-          <div style={{ marginTop: 6, color: COLORS.gray600, fontSize: 12 }}>Select at least one key to receive change.</div>
+          <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+            <div>
+              <b>Change Keys</b>
+              <div style={{ marginTop: 6, color: COLORS.gray600, fontSize: 12 }}>Select at least one key to receive change.</div>
+            </div>
+            <button onClick={handleGenerateNewChangeKey} style={{ ...btnGhostStyle, background: COLORS.green }}>Generate New Key</button>
+          </div>
+          
           {vault.keys.map(k => <div key={k.serial} style={{ padding: '6px 0' }}><label>
             <input type="checkbox" checked={!!changeSerials[k.serial]} onChange={e => setChangeSerials(prev => ({ ...prev, [k.serial]: e.target.checked }))} />
             {' '}
@@ -1751,14 +1840,71 @@ const SignedBeefModalInline: FC<{ hex: string; txid: string }> = ({ hex, txid })
   )
 }
 
+const LogsPanel: FC<{ vault: Vault, onUpdate: () => void }> = ({ vault, onUpdate }) => {
+    const [customLogEntry, setCustomLogEntry] = useState('')
+    const dialog = useDialog()
+  
+    const addCustomLog = async () => {
+      if (!customLogEntry.trim()) return
+      const ok = await dialog.confirm('Are you sure you want to add this custom entry to the permanent vault log? This action cannot be undone.', 'Confirm Log Entry')
+      if (ok) {
+        vault.logVault('custom.entry', customLogEntry)
+        setCustomLogEntry('')
+        onUpdate()
+      }
+    }
+  
+    const LogViewer: FC<{ log: AuditEvent[] }> = ({ log }) => (
+      <div style={{ height: 200, overflowY: 'auto', border: `1px solid ${COLORS.border}`, borderRadius: 6, padding: 8, background: '#fcfcfc', fontFamily: 'monospace', fontSize: 12 }}>
+        {[...log].reverse().map(e => (
+          <div key={e.at + e.event}>{`[${new Date(e.at).toISOString()}] ${e.event}${e.data ? `: ${e.data}` : ''}`}</div>
+        ))}
+      </div>
+    )
+  
+    return (
+      <section style={{ ...sectionStyle }}>
+        <h2 style={{ marginTop: 0 }}>Logs</h2>
+        <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 24 }}>
+          <div>
+            <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 8 }}>
+              <h3>Vault Log (Permanent)</h3>
+              <button onClick={() => vault.exportVaultLog()} style={btnGhostStyle}>Download</button>
+            </div>
+            <LogViewer log={vault.vaultLog} />
+            <div style={{ marginTop: 8 }}>
+              <input
+                placeholder="Add custom vault log entry..."
+                value={customLogEntry}
+                onChange={e => setCustomLogEntry(e.target.value)}
+                style={{ ...inputStyle, marginBottom: 4 }}
+              />
+              <button onClick={addCustomLog} style={btnStyle}>Add Entry</button>
+            </div>
+          </div>
+          <div>
+            <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 8 }}>
+              <h3>Session Log (Ephemeral)</h3>
+              <button onClick={() => vault.exportSessionLog()} style={btnGhostStyle}>Download</button>
+            </div>
+            <LogViewer log={vault.sessionLog} />
+          </div>
+        </div>
+      </section>
+    )
+  }
+
 const SettingsPanel: FC<{ vault: Vault, onUpdate: () => void }> = ({ vault, onUpdate }) => {
   const [incoming, setIncoming] = useState(vault.confirmIncomingCoins)
   const [outgoing, setOutgoing] = useState(vault.confirmOutgoingCoins)
   const [phOld, setPhOld] = useState(String(vault.persistHeadersOlderThanBlocks))
   const [rvRecent, setRvRecent] = useState(String(vault.reverifyRecentHeadersAfterSeconds))
   const [rvHeight, setRvHeight] = useState(String(vault.reverifyCurrentBlockHeightAfterSeconds))
+  const dialog = useDialog()
 
-  function save() {
+  async function save() {
+    const ok = await dialog.confirm('Are you sure you want to apply these settings? This will mark the vault as having unsaved changes.', 'Confirm Settings')
+    if (!ok) return
     vault.confirmIncomingCoins = !!incoming
     vault.confirmOutgoingCoins = !!outgoing
     vault.persistHeadersOlderThanBlocks = Number(phOld) || vault.persistHeadersOlderThanBlocks
@@ -1793,7 +1939,7 @@ const SettingsPanel: FC<{ vault: Vault, onUpdate: () => void }> = ({ vault, onUp
         </div>
       </div>
       <div style={{ marginTop: 12 }}>
-        <button onClick={save} style={btnStyle}>Apply</button>
+        <button onClick={save} style={btnStyle}>Apply Changes</button>
       </div>
     </section>
   )
