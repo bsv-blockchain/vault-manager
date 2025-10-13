@@ -105,50 +105,93 @@ type DialogAPI = {
 
 const DialogCtx = createContext<DialogAPI | null>(null)
 
+const PromptDialog: FC<{ req: DialogRequest & { kind: 'prompt' }; onResolve: (val: string | null) => void }> = ({ req, onResolve }) => {
+  const [val, setVal] = useState(req.defaultValue || '')
+
+  // Reset the value if the request changes, ensuring the input is fresh
+  useEffect(() => {
+    setVal(req.defaultValue || '')
+  }, [req])
+
+  const handleSubmit = (e: React.FormEvent) => {
+    e.preventDefault()
+    onResolve(val)
+  }
+
+  return (
+    <Modal title={req.title || 'Input required'} onClose={() => onResolve(null)}>
+      <form onSubmit={handleSubmit}>
+        <p style={{ whiteSpace: 'pre-wrap' }}>{req.message}</p>
+        <input
+          type={req.password ? 'password' : 'text'}
+          value={val}
+          onChange={e => setVal(e.target.value)}
+          style={{ ...inputStyle, marginTop: 8 }}
+          autoFocus
+        />
+        <div style={{ display: 'flex', justifyContent: 'flex-end', marginTop: 12, gap: 8 }}>
+          <button type="button" onClick={() => onResolve(null)} style={btnGhostStyle}>Cancel</button>
+          <button type="submit" style={btnStyle}>OK</button>
+        </div>
+      </form>
+    </Modal>
+  )
+}
+
 const DialogHost: FC<{ queue: DialogRequest[]; setQueue: React.Dispatch<React.SetStateAction<DialogRequest[]>> }> = ({ queue, setQueue }) => {
   if (!queue.length) return null
   const req = queue[0]
   const close = () => setQueue(q => q.slice(1))
+
+  // Keypress handler for the simple 'alert' dialog
+  useEffect(() => {
+    if (req.kind !== 'alert') return
+
+    const handleKeyDown = (event: KeyboardEvent) => {
+      if (event.key === 'Enter') {
+        event.preventDefault()
+        req.resolve()
+        close()
+      }
+    }
+    document.addEventListener('keydown', handleKeyDown)
+    return () => document.removeEventListener('keydown', handleKeyDown)
+  }, [req, close])
+
 
   if (req.kind === 'alert') {
     return (
       <Modal title={req.title || 'Notice'} onClose={() => { req.resolve(); close() }}>
         <p style={{ whiteSpace: 'pre-wrap' }}>{req.message}</p>
         <div style={{ display: 'flex', justifyContent: 'flex-end', marginTop: 12 }}>
-          <button onClick={() => { req.resolve(); close() }} style={btnStyle}>OK</button>
+          <button onClick={() => { req.resolve(); close() }} style={btnStyle} autoFocus>OK</button>
         </div>
       </Modal>
     )
   }
+
   if (req.kind === 'confirm') {
     return (
       <Modal title={req.title || 'Confirm'} onClose={() => { req.resolve(false); close() }}>
         <p style={{ whiteSpace: 'pre-wrap' }}>{req.message}</p>
         <div style={{ display: 'flex', justifyContent: 'flex-end', marginTop: 12, gap: 8 }}>
           <button onClick={() => { req.resolve(false); close() }} style={btnGhostStyle}>Cancel</button>
-          <button onClick={() => { req.resolve(true); close() }} style={btnStyle}>OK</button>
+          <button onClick={() => { req.resolve(true); close() }} style={btnStyle} autoFocus>OK</button>
         </div>
       </Modal>
     )
   }
-  // prompt
-  const [val, setVal] = React.useState(req.defaultValue || '')
-  return (
-    <Modal title={req.title || 'Input required'} onClose={() => { req.resolve(null); close() }}>
-      <p style={{ whiteSpace: 'pre-wrap' }}>{req.message}</p>
-      <input
-        type={req.password ? 'password' : 'text'}
-        value={val}
-        onChange={e => setVal(e.target.value)}
-        style={{ ...inputStyle, marginTop: 8 }}
-        autoFocus
-      />
-      <div style={{ display: 'flex', justifyContent: 'flex-end', marginTop: 12, gap: 8 }}>
-        <button onClick={() => { req.resolve(null); close() }} style={btnGhostStyle}>Cancel</button>
-        <button onClick={() => { req.resolve(val); close() }} style={btnStyle}>OK</button>
-      </div>
-    </Modal>
-  )
+
+  if (req.kind === 'prompt') {
+    return (
+      <PromptDialog req={req} onResolve={(val) => {
+        req.resolve(val)
+        close()
+      }} />
+    )
+  }
+
+  return null
 }
 
 export const DialogProvider: FC<{ children: ReactNode }> = ({ children }) => {
@@ -1402,9 +1445,10 @@ const OutgoingWizard: FC<{ vault: Vault, onUpdate: () => void, notify: (t: Notif
   type Step = 1 | 2 | 3 | 4 | 5
   const [step, setStep] = useState<Step>(1)
 
-  const [outputsText, setOutputsText] = useState<string>('') // "<address_or_script> <sats> [memo]"
-  const [parsedOutputs, setParsedOutputs] = useState<OutgoingOutputSpec[]>([])
+  // State for the new multi-output UI
+  const [outputs, setOutputs] = useState([{ destinationAddressOrScript: '', satoshis: '', memo: '' }])
 
+  const [parsedOutputs, setParsedOutputs] = useState<OutgoingOutputSpec[]>([])
   const [manualInputs, setManualInputs] = useState<Record<string, boolean>>({})
   const [changeSerials, setChangeSerials] = useState<Record<string, boolean>>({})
   const [txMemo, setTxMemo] = useState<string>('')
@@ -1414,23 +1458,62 @@ const OutgoingWizard: FC<{ vault: Vault, onUpdate: () => void, notify: (t: Notif
   const [beefTxid, setBeefTxid] = useState<string | null>(null)
   const [isBuilding, setIsBuilding] = useState(false)
 
-  function parseOutgoingLines(text: string): OutgoingOutputSpec[] {
-    const lines = text.split('\n').map(s => s.trim()).filter(Boolean)
-    return lines.map(line => {
-      const parts = line.match(/^(\S+)\s+(\d+)(?:\s+(.*))?$/)
-      if (!parts) throw new Error(`Invalid output line format: ${line}`)
-      const [, dest, satStr, memo] = parts
-      const sat = Number(satStr)
-      if (!Number.isFinite(sat) || sat <= 0) throw new Error(`Bad amount on line: ${line}`)
-      return { destinationAddressOrScript: dest, satoshis: sat, memo: memo || '' }
-    })
+  // Handlers for the multi-output UI
+  const handleOutputChange = (index: number, field: keyof typeof outputs[0], value: string) => {
+    const newOutputs = [...outputs]
+    newOutputs[index] = { ...newOutputs[index], [field]: value }
+    setOutputs(newOutputs)
+  }
+
+  const addOutput = () => {
+    setOutputs([...outputs, { destinationAddressOrScript: '', satoshis: '', memo: '' }])
+  }
+
+  const removeOutput = (index: number) => {
+    if (outputs.length > 1) {
+      setOutputs(outputs.filter((_, i) => i !== index))
+    }
+  }
+
+  const resetWizard = () => {
+    setStep(1)
+    setOutputs([{ destinationAddressOrScript: '', satoshis: '', memo: '' }])
+    setParsedOutputs([])
+    setManualInputs({})
+    setChangeSerials({})
+    setTxMemo('')
+    setRequirePerUtxoAttestation(false)
+    setBeefHex(null)
+    setBeefTxid(null)
   }
 
   function nextFromOutputs() {
     try {
-      const out = parseOutgoingLines(outputsText)
-      if (!out.length) throw new Error('Enter at least one output.')
-      setParsedOutputs(out)
+      const specs: OutgoingOutputSpec[] = []
+      for (const output of outputs) {
+        const dest = output.destinationAddressOrScript.trim()
+        const satStr = output.satoshis.trim()
+        const memo = output.memo.trim()
+
+        // Skip completely empty rows silently
+        if (!dest && !satStr && !memo) continue
+
+        const sat = Number(satStr)
+        if (!dest) {
+          throw new Error('An output is missing a destination address or script.')
+        }
+        if (!Number.isInteger(sat) || sat <= 0) {
+          throw new Error(`Invalid satoshi amount for destination "${dest.slice(0, 20)}...". Must be a positive integer.`)
+        }
+
+        specs.push({ destinationAddressOrScript: dest, satoshis: sat, memo: memo || undefined })
+      }
+
+      if (specs.length === 0) {
+        throw new Error('You must define at least one valid output.')
+      }
+
+      setParsedOutputs(specs)
       setStep(2)
     } catch (e: any) {
       notify('error', e.message || 'Invalid outputs.')
@@ -1438,13 +1521,13 @@ const OutgoingWizard: FC<{ vault: Vault, onUpdate: () => void, notify: (t: Notif
   }
 
   function nextFromInputs() {
-    const selectedIds = Object.entries(manualInputs).filter(([_, on]) => on).map(([id]) => id)
+    const selectedIds = Object.keys(manualInputs).filter(id => manualInputs[id])
     if (!selectedIds.length) { notify('error', 'Select at least one input UTXO.'); return }
     setStep(3)
   }
 
   function nextFromChange() {
-    const change = Object.entries(changeSerials).filter(([_, on]) => on).map(([s]) => s)
+    const change = Object.keys(changeSerials).filter(s => changeSerials[s])
     if (!change.length) { notify('error', 'Select at least one change key.'); return }
     setStep(4)
   }
@@ -1452,18 +1535,18 @@ const OutgoingWizard: FC<{ vault: Vault, onUpdate: () => void, notify: (t: Notif
   async function buildAndSign() {
     setIsBuilding(true)
     try {
-      const selectedIds = Object.entries(manualInputs).filter(([_, on]) => on).map(([id]) => id)
-      const change = Object.entries(changeSerials).filter(([_, on]) => on).map(([s]) => s)
+      const selectedIds = Object.keys(manualInputs).filter(id => manualInputs[id])
+      const change = Object.keys(changeSerials).filter(s => changeSerials[s])
 
       const attestationFn: AttestationFn | undefined =
         (vault.confirmOutgoingCoins && requirePerUtxoAttestation)
           ? async (coin) => {
-              const id = `${coin.txid}:${coin.outputIndex}`
-              return await dialog.confirm(
-                `ATTESTATION REQUIRED:\n\nConfirm this UTXO is unspent on the HONEST chain:\n\n${id}`,
-                'Per-UTXO Attestation'
-              )
-            }
+            const id = `${coin.txid}:${coin.outputIndex}`
+            return await dialog.confirm(
+              `ATTESTATION REQUIRED:\n\nConfirm this UTXO is unspent on the HONEST chain:\n\n${id}`,
+              'Per-UTXO Attestation'
+            )
+          }
           : undefined
 
       const { tx, atomicBEEFHex } = await vault.buildAndSignOutgoing({
@@ -1478,11 +1561,6 @@ const OutgoingWizard: FC<{ vault: Vault, onUpdate: () => void, notify: (t: Notif
       setBeefHex(atomicBEEFHex)
       setBeefTxid(tx.id('hex') as string)
 
-      // cleanup & advance
-      setOutputsText('')
-      setManualInputs({})
-      setChangeSerials({})
-      setTxMemo('')
       onUpdate()
       notify('success', 'Transaction built & signed. SAVE the vault to persist changes.')
       setStep(5)
@@ -1493,9 +1571,11 @@ const OutgoingWizard: FC<{ vault: Vault, onUpdate: () => void, notify: (t: Notif
     }
   }
 
+  const btnRemoveStyle: React.CSSProperties = { ...btnGhostStyle, background: COLORS.red, color: 'white', padding: '8px 12px', lineHeight: 1, minWidth: 'auto', fontWeight: 'bold' }
+
   const StepIndicator = () => (
     <div style={{ display: 'flex', gap: 8, marginBottom: 12, flexWrap: 'wrap' }}>
-      {[1,2,3,4,5].map(n => (
+      {[1, 2, 3, 4, 5].map(n => (
         <div key={n} style={{
           padding: '6px 10px',
           borderRadius: 999,
@@ -1503,7 +1583,7 @@ const OutgoingWizard: FC<{ vault: Vault, onUpdate: () => void, notify: (t: Notif
           color: step === n ? '#fff' : '#444',
           fontSize: 12
         }}>
-          {n}. {n===1?'Outputs':n===2?'Inputs':n===3?'Change':n===4?'Review & Sign':'Result'}
+          {n}. {n === 1 ? 'Outputs' : n === 2 ? 'Inputs' : n === 3 ? 'Change' : n === 4 ? 'Review & Sign' : 'Result'}
         </div>
       ))}
     </div>
@@ -1517,10 +1597,40 @@ const OutgoingWizard: FC<{ vault: Vault, onUpdate: () => void, notify: (t: Notif
       {step === 1 && (
         <div>
           <div style={{ marginBottom: 8, color: COLORS.gray600, fontSize: 12 }}>
-            Enter outputs, one per line: <code>&lt;address_or_script_hex&gt; &lt;satoshis&gt; [optional memo]</code>
+            Add one or more outputs for the transaction.
           </div>
-          <textarea rows={5} style={{ ...inputStyle, width: '100%', fontFamily: 'monospace' }} value={outputsText} onChange={e => setOutputsText(e.target.value)} placeholder={`1ABC... 546 tip for good work\n76a914...88ac 1000 payment for invoice #123`} />
-          <div style={{ marginTop: 10, display: 'flex', justifyContent: 'flex-end', gap: 8 }}>
+          <div style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
+            {outputs.map((output, index) => (
+              <div key={index} style={{ display: 'flex', gap: 8, alignItems: 'center' }}>
+                <input
+                  placeholder="Address or Script Hex"
+                  value={output.destinationAddressOrScript}
+                  onChange={(e) => handleOutputChange(index, 'destinationAddressOrScript', e.target.value)}
+                  style={{ ...inputStyle, flex: 3, minWidth: 200 }}
+                />
+                <input
+                  type="number"
+                  placeholder="Satoshis"
+                  value={output.satoshis}
+                  onChange={(e) => handleOutputChange(index, 'satoshis', e.target.value)}
+                  style={{ ...inputStyle, flex: 1, minWidth: 100 }}
+                />
+                <input
+                  placeholder="Memo (optional)"
+                  value={output.memo}
+                  onChange={(e) => handleOutputChange(index, 'memo', e.target.value)}
+                  style={{ ...inputStyle, flex: 2, minWidth: 120 }}
+                />
+                <button onClick={() => removeOutput(index)} disabled={outputs.length <= 1} style={btnRemoveStyle}>
+                  &times;
+                </button>
+              </div>
+            ))}
+          </div>
+          <div style={{ marginTop: 10 }}>
+            <button onClick={addOutput} style={{ ...btnGhostStyle, background: COLORS.green, color: 'white' }}>+ Add Output</button>
+          </div>
+          <div style={{ marginTop: 10, display: 'flex', justifyContent: 'flex-end' }}>
             <button onClick={nextFromOutputs} style={btnStyle}>Next: Select Inputs</button>
           </div>
         </div>
@@ -1536,12 +1646,12 @@ const OutgoingWizard: FC<{ vault: Vault, onUpdate: () => void, notify: (t: Notif
             try {
               const tx = getTxFromStore(vault.beefStore, c.txid)
               sats = tx.outputs[c.outputIndex].satoshis as number
-            } catch {}
-            return <div key={id} style={{padding: '6px 0'}}><label>
-                <input type="checkbox" checked={!!manualInputs[id]} onChange={e => setManualInputs(prev => ({ ...prev, [id]: e.target.checked }))} />
-                {' '}
-                {id} — {sats.toLocaleString()} sats ({(sats / 100000000).toFixed(8)} BSV)
-              </label></div>
+            } catch { }
+            return <div key={id} style={{ padding: '6px 0' }}><label>
+              <input type="checkbox" checked={!!manualInputs[id]} onChange={e => setManualInputs(prev => ({ ...prev, [id]: e.target.checked }))} />
+              {' '}
+              {id} — {sats.toLocaleString()} sats ({(sats / 100000000).toFixed(8)} BSV)
+            </label></div>
           })}
           <div style={{ marginTop: 10, display: 'flex', justifyContent: 'space-between', gap: 8 }}>
             <button onClick={() => setStep(1)} style={btnGhostStyle}>Back</button>
@@ -1554,11 +1664,11 @@ const OutgoingWizard: FC<{ vault: Vault, onUpdate: () => void, notify: (t: Notif
         <div>
           <b>Change Keys</b>
           <div style={{ marginTop: 6, color: COLORS.gray600, fontSize: 12 }}>Select at least one key to receive change.</div>
-          {vault.keys.map(k => <div key={k.serial} style={{padding: '6px 0'}}><label>
-              <input type="checkbox" checked={!!changeSerials[k.serial]} onChange={e => setChangeSerials(prev => ({ ...prev, [k.serial]: e.target.checked }))}/>
-              {' '}
-              {k.serial} {k.memo && `— ${k.memo}`} {k.usedOnChain ? <span style={{ color: '#b36' }}> (used)</span> : <span style={{color: COLORS.green}}>(unused)</span>}
-            </label></div>)}
+          {vault.keys.map(k => <div key={k.serial} style={{ padding: '6px 0' }}><label>
+            <input type="checkbox" checked={!!changeSerials[k.serial]} onChange={e => setChangeSerials(prev => ({ ...prev, [k.serial]: e.target.checked }))} />
+            {' '}
+            {k.serial} {k.memo && `— ${k.memo}`} {k.usedOnChain ? <span style={{ color: '#b36' }}> (used)</span> : <span style={{ color: COLORS.green }}>(unused)</span>}
+          </label></div>)}
           <div style={{ marginTop: 12, display: 'flex', alignItems: 'center', gap: 12, flexWrap: 'wrap' }}>
             {vault.confirmOutgoingCoins && (
               <label><input type="checkbox" checked={requirePerUtxoAttestation} onChange={e => setRequirePerUtxoAttestation(e.target.checked)} /> {' '}Per-UTXO Attestation</label>
@@ -1578,17 +1688,17 @@ const OutgoingWizard: FC<{ vault: Vault, onUpdate: () => void, notify: (t: Notif
           <div style={{ display: 'flex', gap: 24, marginTop: 8, flexWrap: 'wrap' }}>
             <div style={{ flex: 1, minWidth: 280 }}>
               <div style={{ fontWeight: 600 }}>Outputs</div>
-              <div style={{ border: `1px solid ${COLORS.border}`, borderRadius: 6, padding: 8, marginTop: 6, fontFamily: 'monospace', whiteSpace: 'pre-wrap', fontSize: 12 }}>
-                {parsedOutputs.map((o, i) => `${i+1}. ${o.destinationAddressOrScript} ${o.satoshis}${o.memo ? ' ' + o.memo : ''}`).join('\n')}
+              <div style={{ border: `1px solid ${COLORS.border}`, borderRadius: 6, padding: 8, marginTop: 6, fontFamily: 'monospace', whiteSpace: 'pre-wrap', fontSize: 12, overflowX: 'auto' }}>
+                {parsedOutputs.map((o, i) => `${i + 1}. ${o.destinationAddressOrScript} ${o.satoshis}${o.memo ? ` (${o.memo})` : ''}`).join('\n')}
               </div>
             </div>
             <div style={{ flex: 1, minWidth: 280 }}>
               <div style={{ fontWeight: 600 }}>Inputs</div>
               <div style={{ border: `1px solid ${COLORS.border}`, borderRadius: 6, padding: 8, marginTop: 6, fontFamily: 'monospace', whiteSpace: 'pre-wrap', fontSize: 12 }}>
-                {Object.entries(manualInputs).filter(([_, on]) => on).map(([id]) => id).join('\n') || '—'}
+                {Object.keys(manualInputs).filter(id => manualInputs[id]).join('\n') || '—'}
               </div>
               <div style={{ marginTop: 8, fontSize: 12 }}>
-                Change Keys: <b>{Object.entries(changeSerials).filter(([_, on]) => on).map(([s]) => s).join(', ') || '—'}</b>
+                Change Keys: <b>{Object.keys(changeSerials).filter(s => changeSerials[s]).join(', ') || '—'}</b>
               </div>
               <div style={{ marginTop: 4, fontSize: 12 }}>
                 Per-UTXO Attestation: <b>{vault.confirmOutgoingCoins ? (requirePerUtxoAttestation ? 'Enabled' : 'Disabled') : 'Policy off'}</b>
@@ -1613,7 +1723,7 @@ const OutgoingWizard: FC<{ vault: Vault, onUpdate: () => void, notify: (t: Notif
             <div style={{ marginTop: 8 }}>No result to show.</div>
           )}
           <div style={{ marginTop: 12, display: 'flex', justifyContent: 'flex-end' }}>
-            <button onClick={() => setStep(1)} style={btnStyle}>Create Another</button>
+            <button onClick={resetWizard} style={btnStyle}>Create Another</button>
           </div>
         </div>
       )}
