@@ -24,15 +24,15 @@ const COLORS = {
 }
 
 const appShellStyle: React.CSSProperties = { fontFamily: 'Inter, system-ui, -apple-system, Segoe UI, Roboto, sans-serif', background: COLORS.light, minHeight: '100vh', color: COLORS.gray700, colorScheme: 'light' }
-const containerStyle: React.CSSProperties = { padding: 16, maxWidth: 1180, margin: '0 auto' }
-const panelStyle: React.CSSProperties = { background: COLORS.panel, border: `1px solid ${COLORS.border}`, borderRadius: 8, padding: 16, boxShadow: '0 2px 10px rgba(0,0,0,0.03)' }
-const sectionStyle: React.CSSProperties = { ...panelStyle, marginBottom: 16 }
-const btnStyle: React.CSSProperties = { background: COLORS.blue, color: 'white', border: 'none', padding: '10px 14px', borderRadius: 6, cursor: 'pointer' }
-const btnGhostStyle: React.CSSProperties = { background: '#777', color: '#fff', border: 'none', padding: '10px 14px', borderRadius: 6, cursor: 'pointer' }
+const containerStyle: React.CSSProperties = { padding: 12, maxWidth: 1180, margin: '0 auto' }
+const panelStyle: React.CSSProperties = { background: COLORS.panel, border: `1px solid ${COLORS.border}`, borderRadius: 8, padding: 12, boxShadow: '0 2px 10px rgba(0,0,0,0.03)' }
+const sectionStyle: React.CSSProperties = { ...panelStyle, marginBottom: 12 }
+const btnStyle: React.CSSProperties = { background: COLORS.blue, color: 'white', border: 'none', padding: '12px 14px', borderRadius: 8, cursor: 'pointer', width: '100%', maxWidth: 240, touchAction: 'manipulation' }
+const btnGhostStyle: React.CSSProperties = { background: '#777', color: '#fff', border: 'none', padding: '12px 14px', borderRadius: 8, cursor: 'pointer', width: '100%', maxWidth: 240, touchAction: 'manipulation' }
 const inputStyle: React.CSSProperties = {
   border: `1px solid ${COLORS.border}`,
-  borderRadius: 6,
-  padding: '8px 10px',
+  borderRadius: 8,
+  padding: '10px 12px',
   width: '100%',
   background: '#fff',
   color: '#111',
@@ -48,12 +48,12 @@ const NotificationBanner: FC<{ notification: Notification, onDismiss: () => void
 
   return (
     <div style={{
-      position: 'fixed', top: 16, right: 16, background: colors[notification.type], color: 'white',
-      padding: '12px 16px', borderRadius: 8, zIndex: 1000, boxShadow: '0 8px 24px rgba(0,0,0,0.2)',
-      display: 'flex', alignItems: 'center', gap: 16
+      position: 'fixed', top: 12, right: 12, background: colors[notification.type], color: 'white',
+      padding: '12px 16px', borderRadius: 12, zIndex: 1000, boxShadow: '0 8px 24px rgba(0,0,0,0.2)',
+      display: 'flex', alignItems: 'center', gap: 16, maxWidth: '90vw'
     }}>
-      <span>{notification.message}</span>
-      <button onClick={onDismiss} style={{ background: 'none', border: 'none', color: 'white', fontSize: 18, cursor: 'pointer' }}>&times;</button>
+      <span style={{ wordBreak: 'break-word' }}>{notification.message}</span>
+      <button onClick={onDismiss} style={{ background: 'none', border: 'none', color: 'white', fontSize: 22, cursor: 'pointer', lineHeight: 1, padding: 0 }}>&times;</button>
     </div>
   )
 }
@@ -70,19 +70,20 @@ const Modal: FC<{ title: string, children: ReactNode, onClose: () => void }> = (
       display: 'flex',
       alignItems: 'center',
       justifyContent: 'center',
-      zIndex: 1000
+      zIndex: 1000,
+      padding: 8
     }}>
       <div style={{
         background: 'white',
         color: '#111',
-        padding: 20,
-        borderRadius: 10,
-        minWidth: 540,
+        padding: 12,
+        borderRadius: 12,
+        minWidth: 280,
         maxWidth: 900,
-        width: '90%'
+        width: '95%',
       }}>
-        <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', borderBottom: `1px solid ${COLORS.border}`, paddingBottom: 10, marginBottom: 15 }}>
-          <h2 style={{ margin: 0 }}>{title}</h2>
+        <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', borderBottom: `1px solid ${COLORS.border}`, paddingBottom: 8, marginBottom: 12, gap: 8 }}>
+          <h2 style={{ margin: 0, fontSize: 18 }}>{title}</h2>
           <button onClick={onClose} style={{ background: 'none', border: 'none', fontSize: 28, cursor: 'pointer', lineHeight: 1 }}>&times;</button>
         </div>
         {children}
@@ -129,7 +130,7 @@ const PromptDialog: FC<{ req: DialogRequest & { kind: 'prompt' }; onResolve: (va
           style={{ ...inputStyle, marginTop: 8 }}
           autoFocus
         />
-        <div style={{ display: 'flex', justifyContent: 'flex-end', marginTop: 12, gap: 8 }}>
+        <div style={{ display: 'flex', justifyContent: 'flex-end', marginTop: 12, gap: 8, flexWrap: 'wrap' }}>
           <button type="button" onClick={() => onResolve(null)} style={btnGhostStyle}>Cancel</button>
           <button type="submit" style={btnStyle}>OK</button>
         </div>
@@ -174,7 +175,7 @@ const DialogHost: FC<{ queue: DialogRequest[]; setQueue: React.Dispatch<React.Se
     return (
       <Modal title={req.title || 'Confirm'} onClose={() => { req.resolve(false); close() }}>
         <p style={{ whiteSpace: 'pre-wrap' }}>{req.message}</p>
-        <div style={{ display: 'flex', justifyContent: 'flex-end', marginTop: 12, gap: 8 }}>
+        <div style={{ display: 'flex', justifyContent: 'flex-end', marginTop: 12, gap: 8, flexWrap: 'wrap' }}>
           <button onClick={() => { req.resolve(false); close() }} style={btnGhostStyle}>Cancel</button>
           <button onClick={() => { req.resolve(true); close() }} style={btnStyle} autoFocus>OK</button>
         </div>
@@ -374,8 +375,56 @@ class Vault implements ChainTracker {
   currentBlockHeight = 0
   currentBlockHeightAcquiredAt = 0
 
+  /** Randomness policy */
+  useUserEntropyForRandom = false
+
   /** UI-only flags */
   saved = false
+
+  // -------------------------------------------------------------------------
+  // Randomness Wizard & Helpers
+  // -------------------------------------------------------------------------
+  private async getRandomBytes(n: number): Promise<number[]> {
+    // Always include device entropy
+    const dev = Random(Math.max(32, n))
+    if (!this.useUserEntropyForRandom) return dev.slice(0, n)
+
+    // Ask the user for extra entropy in a simple modal flow
+    const part1 = (await this.ui.prompt(
+      'Type or paste a bunch of random characters (keyboard mashing, dice rolls, book numbers, etc).',
+      { title: 'Entropy Input — Part 1' }
+    )) || ''
+    const part2 = (await this.ui.prompt(
+      'Again (different source than before).',
+      { title: 'Entropy Input — Part 2' }
+    )) || ''
+
+    const userSeed = Utils.toArray(part1 + '|' + part2, 'utf8')
+    const userHash = Hash.sha256(userSeed) // 32 bytes
+
+    // Expand to n bytes using iterative hashing, mixing device entropy
+    const out: number[] = []
+    let counter = 0
+    while (out.length < n) {
+      const block = Hash.sha256([
+        ...dev,
+        ...userHash,
+        ...Utils.toArray(String(counter))
+      ])
+      out.push(...block)
+      counter++
+    }
+    // Final mash: xor with device entropy (cycled) to avoid user-only or device-only weakness
+    const mixed = out.slice(0, n).map((b, i) => b ^ dev[i % dev.length])
+    this.logSession('random.bytes', `n=${n} userEntropy=1`)
+    return mixed
+  }
+
+  private async newPrivateKey(): Promise<PrivateKey> {
+    const bytes = await this.getRandomBytes(32)
+    const pk = new PrivateKey(bytes)
+    return pk
+  }
 
   // -------------------------------------------------------------------------
   // Logging (forensic; strictly sanitized)
@@ -470,9 +519,12 @@ class Vault implements ChainTracker {
       const n = Number(roundsIn)
       if (n >= 1) v.passwordRounds = n
     }
-    v.passwordSalt = Random(32)
+    v.passwordSalt = await v.getRandomBytes(32)
     v.logKV('vault', 'passwordRounds', String(v.passwordRounds))
     v.logKV('vault', 'passwordSalt.len', String(v.passwordSalt.length))
+
+    // Policy: ask whether to use user entropy for future randomness
+    v.useUserEntropyForRandom = await ui.confirm('Require user-provided entropy whenever randomness is needed? (Recommended if you distrust device RNG)', 'Randomness Policy')
 
     // Require password once, derive and cache key
     const pw = (await ui.prompt('Set a password for this vault file (required):', { title: 'Vault Password', password: true })) || ''
@@ -511,7 +563,7 @@ class Vault implements ChainTracker {
 
     const r = new Utils.Reader(file)
     const proto = r.readVarIntNum()
-    if (proto !== v.protocolVersion) throw new Error(`Vault protocol version mismatch. File=${proto} Software=${v.protocolVersion}`)
+    if (proto !== 1 && proto !== v.protocolVersion) throw new Error(`Vault protocol version mismatch. File=${proto} Software=${v.protocolVersion}`)
     v.logVault('vault.proto.ok', String(proto))
 
     const rounds = r.readVarIntNum()
@@ -535,7 +587,7 @@ class Vault implements ChainTracker {
       }
     } while (decrypted.length === 0)
 
-    v.deserializePlaintext(decrypted)
+    v.deserializePlaintext(decrypted, proto)
     v.logSession('vault.load.ok')
     await v.currentHeight() // Prompt for block height on load
     return v
@@ -595,6 +647,40 @@ class Vault implements ChainTracker {
 }
 
   // -------------------------------------------------------------------------
+  // Password & Name management
+  // -------------------------------------------------------------------------
+  async renameVault(newName: string): Promise<void> {
+    const name = (newName || '').trim()
+    assert(name.length > 0, 'Vault name cannot be empty.')
+    this.vaultName = name
+    this.logVault('vault.renamed', name)
+  }
+
+  async changePassword(): Promise<void> {
+    assert(this.encryptionKey, 'Encryption key not initialized.')
+
+    const newPw = await this.ui.prompt('Enter NEW password:', { title: 'Change Password', password: true })
+    if (!newPw) throw new Error('Password change cancelled or empty.')
+    const confirmPw = await this.ui.prompt('Re-enter NEW password:', { title: 'Confirm New Password', password: true })
+    if (newPw !== confirmPw) throw new Error('Passwords do not match.')
+
+    const roundsIn = await this.ui.prompt(`PBKDF2 rounds? (default ${this.passwordRounds})`, { title: 'PBKDF2 Rounds', defaultValue: String(this.passwordRounds) })
+    let rounds = this.passwordRounds
+    if (roundsIn && /^\d+$/.test(roundsIn)) {
+      const n = Number(roundsIn)
+      if (n >= 1) rounds = n
+    }
+
+    // rotate salt using current randomness policy
+    const newSalt = await this.getRandomBytes(32)
+    const kb = Hash.pbkdf2(Utils.toArray(newPw), newSalt, rounds, 32)
+    this.encryptionKey = new SymmetricKey(kb)
+    this.passwordSalt = newSalt
+    this.passwordRounds = rounds
+    this.logVault('vault.password.changed', `rounds=${rounds} saltlen=${newSalt.length}`)
+  }
+
+  // -------------------------------------------------------------------------
   // Serialization (plaintext only; strictly deterministic)
   // -------------------------------------------------------------------------
   private serializePlaintext (): number[] {
@@ -648,6 +734,7 @@ class Vault implements ChainTracker {
     w.writeVarIntNum(this.persistHeadersOlderThanBlocks)
     w.writeVarIntNum(this.reverifyRecentHeadersAfterSeconds)
     w.writeVarIntNum(this.reverifyCurrentBlockHeightAfterSeconds)
+    w.writeVarIntNum(this.useUserEntropyForRandom ? 1 : 0)
 
     // persisted headers
     w.writeVarIntNum(this.persistedHeaderClaims.length)
@@ -721,12 +808,13 @@ class Vault implements ChainTracker {
       this.vaultLog.push({ at, event, data })
     }
 
-    // settings
+    // settings (v1: 5 items, v2+: 6 items)
     this.confirmIncomingCoins = d.readVarIntNum() !== 0
     this.confirmOutgoingCoins = d.readVarIntNum() !== 0
     this.persistHeadersOlderThanBlocks = d.readVarIntNum()
     this.reverifyRecentHeadersAfterSeconds = d.readVarIntNum()
     this.reverifyCurrentBlockHeightAfterSeconds = d.readVarIntNum()
+    this.useUserEntropyForRandom = d.readVarIntNum() !== 0
 
     // persisted headers
     const nPH = d.readVarIntNum(); this.persistedHeaderClaims = []
@@ -756,8 +844,8 @@ class Vault implements ChainTracker {
     return `K${String(n).padStart(4, '0')}`
   }
 
-  generateKey (memo: string = ''): KeyRecord {
-    const priv = PrivateKey.fromRandom()
+  async generateKey (memo: string = ''): Promise<KeyRecord> {
+    const priv = await this.newPrivateKey()
     const rec: KeyRecord = {
       serial: this.nextSerial(),
       private: priv,
@@ -1145,12 +1233,12 @@ function AppInner () {
       <div style={appShellStyle}>
         <div style={containerStyle}>
           {notification && <NotificationBanner notification={notification} onDismiss={() => setNotification(null)} />}
-          <div style={{ ...panelStyle, padding: 24 }}>
+          <div style={{ ...panelStyle, padding: 16 }}>
             <h1 style={{ marginTop: 0 }}>BSV Vault Manager Suite</h1>
-            <section style={{ border: `1px solid ${COLORS.border}`, padding: 16, borderRadius: 8 }}>
-              <h2 style={{ marginTop: 0 }}>Open / New</h2>
-              <div style={{ display: 'flex', gap: 12, alignItems: 'center', flexWrap: 'wrap' }}>
-                <input type="file" accept=".vaultfile,application/octet-stream" onChange={e => e.target.files && onOpenVault(e.target.files[0])} />
+            <section style={{ border: `1px solid ${COLORS.border}`, padding: 12, borderRadius: 8, display: 'grid', gap: 8 }}>
+              <h2 style={{ marginTop: 0, fontSize: 18 }}>Open / New</h2>
+              <div style={{ display: 'grid', gap: 8 }}>
+                <input style={{ maxWidth: '100%' }} type="file" accept=".vaultfile,application/octet-stream" onChange={e => e.target.files && onOpenVault(e.target.files[0])} />
                 <button onClick={onNewVault} style={btnStyle}>Create New Vault</button>
               </div>
             </section>
@@ -1196,28 +1284,28 @@ function AppInner () {
           />
         )}
 
-        <div style={{ ...panelStyle, padding: 24, marginBottom: 16 }}>
+        <div style={{ ...panelStyle, padding: 16, marginBottom: 12 }}>
           {dirty && (
-            <div style={{ background: COLORS.red, color: 'white', padding: 12, marginBottom: 12, fontWeight: 700, borderRadius: 6 }}>
+            <div style={{ background: COLORS.red, color: 'white', padding: 12, marginBottom: 12, fontWeight: 700, borderRadius: 8 }}>
               UNSAVED CHANGES — Save the new vault file, verify its integrity, and then securely delete the old version.
             </div>
           )}
 
-          <header style={{ borderBottom: `1px solid ${COLORS.border}`, paddingBottom: 12, marginBottom: 16, display: 'flex', justifyContent: 'space-between', alignItems: 'center', gap: 12, flexWrap: 'wrap' }}>
+          <header style={{ borderBottom: `1px solid ${COLORS.border}`, paddingBottom: 12, marginBottom: 12, display: 'grid', gridTemplateColumns: '1fr', gap: 8 }}>
             <div>
-              <h1 style={{ margin: 0 }}>BSV Vault Manager Suite</h1>
+              <h1 style={{ margin: 0, fontSize: 22 }}>BSV Vault Manager Suite</h1>
               <div style={{ color: COLORS.gray600, marginTop: 4 }}>
                 Vault: <b>{vault.vaultName}</b> (rev {vault.vaultRevision})
               </div>
             </div>
-            <div style={{ display: 'flex', gap: 12, alignItems: 'center', flexWrap: 'wrap' }}>
-              <input type="file" accept=".vaultfile,application/octet-stream" onChange={e => e.target.files && onOpenVault(e.target.files[0])} />
-              <button onClick={onSaveVault} style={btnStyle}>Save Vault</button>
+            <div style={{ display: 'grid', gap: 8, gridTemplateColumns: '1fr 1fr', alignItems: 'center' }}>
+              <input style={{ gridColumn: 'span 2' }} type="file" accept=".vaultfile,application/octet-stream" onChange={e => e.target.files && onOpenVault(e.target.files[0])} />
+              <button onClick={onSaveVault} style={{ ...btnStyle, gridColumn: 'span 2' }}>Save Vault</button>
             </div>
           </header>
 
           {/* Tabs */}
-          <div style={{ display: 'flex', gap: 8, borderBottom: `1px solid ${COLORS.border}`, marginBottom: 16, overflowX: 'auto' }}>
+          <div style={{ display: 'flex', gap: 8, borderBottom: `1px solid ${COLORS.border}`, marginBottom: 12, overflowX: 'auto' }}>
             {tabs.map(t => (
               <button
                 key={t.key}
@@ -1226,9 +1314,10 @@ function AppInner () {
                   background: activeTab === t.key ? COLORS.blue : 'transparent',
                   color: activeTab === t.key ? '#fff' : COLORS.gray700,
                   border: 'none',
-                  borderRadius: 8,
+                  borderRadius: 999,
                   padding: '8px 12px',
-                  cursor: 'pointer'
+                  cursor: 'pointer',
+                  whiteSpace: 'nowrap'
                 }}
               >
                 {t.label}
@@ -1270,7 +1359,7 @@ function AppInner () {
           )}
 
           {activeTab === 'settings' && (
-            <SettingsPanel vault={vault} onUpdate={forceAppUpdate} />
+            <SettingsPanel vault={vault} onUpdate={forceAppUpdate} setLastSavedPlainHash={setLastSavedPlainHash} />
           )}
         </div>
       </div>
@@ -1289,8 +1378,8 @@ const DashboardPanel: FC<{ vault: Vault, balance: number, triggerRerender: () =>
     <section style={{ ...sectionStyle }}>
       <h2 style={{ marginTop: 0 }}>Dashboard</h2>
       <div>Total balance: <b>{balance.toLocaleString()}</b> sats (<b>{(balance / 100000000).toFixed(8)}</b> BSV)</div>
-      <div style={{ display: 'flex', gap: 24, marginTop: 16, flexWrap: 'wrap' }}>
-        <div style={{ flex: 1, minWidth: 300 }}>
+      <div style={{ display: 'grid', gap: 16, marginTop: 12, gridTemplateColumns: '1fr' }}>
+        <div style={{ flex: 1, minWidth: 0 }}>
           <h3>Current UTXOs ({vault.coins.length})</h3>
           {vault.coins.length === 0 && <div>No spendable coins</div>}
           {vault.coins.map(c => {
@@ -1301,17 +1390,17 @@ const DashboardPanel: FC<{ vault: Vault, balance: number, triggerRerender: () =>
               sats = tx.outputs[c.outputIndex].satoshis as number
             } catch {}
             return (
-              <div key={id} style={{ borderTop: `1px solid ${COLORS.border}`, padding: '8px 0', fontSize: '12px' }}>
+              <div key={id} style={{ borderTop: `1px solid ${COLORS.border}`, padding: '8px 0', fontSize: '12px', wordBreak: 'break-all' }}>
                 <div><b>{id}</b> — {sats.toLocaleString()} sats (<b>{(sats / 100000000).toFixed(8)}</b> BSV)</div>
                 {c.memo && <div>Memo: {c.memo}</div>}
               </div>
             )
           })}
         </div>
-        <div style={{ flex: 1, minWidth: 300 }}>
+        <div style={{ flex: 1, minWidth: 0 }}>
           <h3>Transaction Log ({vault.transactionLog.length})</h3>
           {[...vault.transactionLog].reverse().map(t => (
-            <div key={t.at + t.txid} style={{ borderTop: `1px solid ${COLORS.border}`, padding: '8px 0', fontSize: '12px' }}>
+            <div key={t.at + t.txid} style={{ borderTop: `1px solid ${COLORS.border}`, padding: '8px 0', fontSize: '12px', wordBreak: 'break-all' }}>
               <div><b>{t.txid}</b></div>
               {t.memo && <div>Memo: {t.memo}</div>}
               <div style={{ color: t.net >= 0 ? COLORS.green : COLORS.red }}>
@@ -1334,11 +1423,11 @@ const KeyManager: FC<{ vault: Vault, onUpdate: () => void, notify: (type: Notifi
   return (
     <section style={{ ...sectionStyle }}>
       <h2 style={{ marginTop: 0 }}>Keys ({vault.keys.length})</h2>
-      <div style={{ display: 'flex', gap: 12, alignItems: 'center', flexWrap: 'wrap' }}>
+      <div style={{ display: 'grid', gap: 8 }}>
         <button
           onClick={async () => {
             const memo = (await dialog.prompt('Memo for this key (optional):', { title: 'Key Memo' })) || ''
-            vault.generateKey(memo); onUpdate()
+            await vault.generateKey(memo); onUpdate()
           }}
           style={btnStyle}
         >
@@ -1347,12 +1436,12 @@ const KeyManager: FC<{ vault: Vault, onUpdate: () => void, notify: (type: Notifi
       </div>
       <div style={{ marginTop: 12 }}>
         {[...vault.keys].reverse().map(k => (
-          <div key={k.serial} style={{ borderTop: `1px solid ${COLORS.border}`, padding: '8px 0', display: 'flex', justifyContent: 'space-between', alignItems: 'center', gap: 12, flexWrap: 'wrap' }}>
+          <div key={k.serial} style={{ borderTop: `1px solid ${COLORS.border}`, padding: '8px 0', display: 'grid', gridTemplateColumns: '1fr', gap: 8 }}>
             <div>
               <b>{k.serial}</b> {k.memo && `— ${k.memo}`} {k.usedOnChain ? <span style={{ color: '#b36' }}> (used)</span> : <span style={{color: COLORS.green}}>(unused)</span>}
-              <div style={{ fontSize: 12, color: COLORS.gray600, fontFamily: 'monospace' }}>{k.public.toAddress()}</div>
+              <div style={{ fontSize: 12, color: COLORS.gray600, fontFamily: 'monospace', wordBreak: 'break-all' }}>{k.public.toAddress()}</div>
             </div>
-            <div style={{ display: 'flex', gap: 8 }}>
+            <div style={{ display: 'grid', gap: 8, gridTemplateColumns: '1fr 1fr' }}>
               <button onClick={async () => { await vault.downloadDepositSlipTxt(k.serial); notify('info', `Deposit slip generated for ${k.serial}`) }} style={btnGhostStyle}>
                 Deposit Slip (.txt)
               </button>
@@ -1429,16 +1518,16 @@ const ProcessIncomingModal: FC<{
 
   return (
     <Modal title="Review Incoming Transaction" onClose={onClose}>
-      <div style={{display:'flex', gap:8, alignItems:'center'}}>
-        <p style={{fontSize: 13, margin: 0}}>TXID: <code>{preview.txid}</code></p>
-        <button onClick={() => navigator.clipboard.writeText(preview.txid)} style={{ ...btnGhostStyle, padding: '6px 10px', fontSize: 12 }}>Copy TXID</button>
+      <div style={{display:'flex', gap:8, alignItems:'center', flexWrap:'wrap'}}>
+        <p style={{fontSize: 13, margin: 0, wordBreak:'break-all'}}>TXID: <code>{preview.txid}</code></p>
+        <button onClick={() => navigator.clipboard.writeText(preview.txid)} style={{ ...btnGhostStyle, padding: '6px 10px', fontSize: 12, maxWidth: 140 }}>Copy TXID</button>
       </div>
       <p style={{fontSize: 13, color: 'green', fontWeight: 'bold'}}>SPV Verified Successfully</p>
-      <hr style={{margin: '16px 0'}} />
+      <hr style={{margin: '12px 0'}} />
       <p>The following outputs in this transaction are spendable by your vault's keys. {needsConfirmation ? 'Select which UTXOs to admit:' : 'All matched UTXOs will be admitted automatically.'}</p>
 
       {preview.matches.map(m => (
-        <div key={m.outputIndex} style={{border: `1px solid ${COLORS.border}`, padding: 8, margin: '8px 0', borderRadius: 6}}>
+        <div key={m.outputIndex} style={{border: `1px solid ${COLORS.border}`, padding: 8, margin: '8px 0', borderRadius: 8}}>
           {needsConfirmation && <input type="checkbox" checked={!!admit[m.outputIndex]} onChange={() => handleToggleAdmit(m.outputIndex)} style={{marginRight: 8}} />}
           <strong>Output #{m.outputIndex}</strong>: {m.satoshis.toLocaleString()} sats (<b>{(m.satoshis / 100000000).toFixed(8)}</b> BSV), to Key <strong>{m.serial}</strong>
           <input
@@ -1456,7 +1545,7 @@ const ProcessIncomingModal: FC<{
           const ids = preview.matches.map(m => `${preview.txid}:${m.outputIndex}`).join('\n')
           navigator.clipboard.writeText(ids)
         }}
-        style={{ ...btnGhostStyle, marginTop: 6, fontSize: 12 }}
+        style={{ ...btnGhostStyle, marginTop: 6, fontSize: 12, maxWidth: 220 }}
       >
         Copy All Matched UTXO IDs
       </button>
@@ -1469,7 +1558,7 @@ const ProcessIncomingModal: FC<{
         onChange={e => setTxMemo(e.target.value)}
       />
 
-      <div style={{marginTop: 16, display: 'flex', justifyContent: 'flex-end', gap: 12}}>
+      <div style={{marginTop: 12, display: 'flex', justifyContent: 'flex-end', gap: 8, flexWrap:'wrap'}}>
         <button onClick={onClose} style={btnGhostStyle}>Cancel</button>
         <button onClick={handleFinalize} disabled={isFinalizing || Object.values(admit).every(v => !v)} style={btnStyle}>
           {isFinalizing ? 'Saving...' : `Admit ${Object.values(admit).filter(Boolean).length} UTXO(s)`}
@@ -1603,7 +1692,7 @@ const OutgoingWizard: FC<{ vault: Vault, onUpdate: () => void, notify: (t: Notif
   async function handleGenerateNewChangeKey() {
     const memo = await dialog.prompt('Enter a memo for the new change key:', { title: 'New Key' })
     if (memo === null) return // User cancelled
-    vault.generateKey(memo || '')
+    await vault.generateKey(memo || '')
     onUpdate() // This will cause the component to get the new key list
     notify('success', 'New key generated and added to the list.')
   }
@@ -1658,10 +1747,10 @@ const OutgoingWizard: FC<{ vault: Vault, onUpdate: () => void, notify: (t: Notif
     }
   }
 
-  const btnRemoveStyle: React.CSSProperties = { ...btnGhostStyle, background: COLORS.red, color: 'white', padding: '8px 12px', lineHeight: 1, minWidth: 'auto', fontWeight: 'bold' }
+  const btnRemoveStyle: React.CSSProperties = { ...btnGhostStyle, background: COLORS.red, color: 'white', padding: '8px 12px', lineHeight: 1, minWidth: 'auto', fontWeight: 'bold', maxWidth: 120 }
 
   const StepIndicator = () => (
-    <div style={{ display: 'flex', gap: 8, marginBottom: 12, flexWrap: 'wrap' }}>
+    <div style={{ display: 'flex', gap: 8, marginBottom: 8, flexWrap: 'wrap' }}>
       {[1, 2, 3, 4, 5].map(n => (
         <div key={n} style={{
           padding: '6px 10px',
@@ -1686,27 +1775,27 @@ const OutgoingWizard: FC<{ vault: Vault, onUpdate: () => void, notify: (t: Notif
           <div style={{ marginBottom: 8, color: COLORS.gray600, fontSize: 12 }}>
             Add one or more outputs for the transaction.
           </div>
-          <div style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
+          <div style={{ display: 'grid', gap: 8 }}>
             {outputs.map((output, index) => (
-              <div key={index} style={{ display: 'flex', gap: 8, alignItems: 'center' }}>
+              <div key={index} style={{ display: 'grid', gap: 8, gridTemplateColumns: '1fr', alignItems: 'center' }}>
                 <input
                   placeholder="Address or Script Hex"
                   value={output.destinationAddressOrScript}
                   onChange={(e) => handleOutputChange(index, 'destinationAddressOrScript', e.target.value)}
-                  style={{ ...inputStyle, flex: 3, minWidth: 200 }}
+                  style={{ ...inputStyle }}
                 />
                 <input
                   type="number"
                   placeholder="Satoshis"
                   value={output.satoshis}
                   onChange={(e) => handleOutputChange(index, 'satoshis', e.target.value)}
-                  style={{ ...inputStyle, flex: 1, minWidth: 100 }}
+                  style={{ ...inputStyle }}
                 />
                 <input
                   placeholder="Memo (optional)"
                   value={output.memo}
                   onChange={(e) => handleOutputChange(index, 'memo', e.target.value)}
-                  style={{ ...inputStyle, flex: 2, minWidth: 120 }}
+                  style={{ ...inputStyle }}
                 />
                 <button onClick={() => removeOutput(index)} disabled={outputs.length <= 1} style={btnRemoveStyle}>
                   &times;
@@ -1714,10 +1803,8 @@ const OutgoingWizard: FC<{ vault: Vault, onUpdate: () => void, notify: (t: Notif
               </div>
             ))}
           </div>
-          <div style={{ marginTop: 10 }}>
+          <div style={{ marginTop: 10, display: 'grid', gap: 8, gridTemplateColumns: '1fr 1fr' }}>
             <button onClick={addOutput} style={{ ...btnGhostStyle, background: COLORS.green, color: 'white' }}>+ Add Output</button>
-          </div>
-          <div style={{ marginTop: 10, display: 'flex', justifyContent: 'flex-end' }}>
             <button onClick={nextFromOutputs} style={btnStyle}>Next: Select Inputs</button>
           </div>
         </div>
@@ -1727,7 +1814,7 @@ const OutgoingWizard: FC<{ vault: Vault, onUpdate: () => void, notify: (t: Notif
         <div>
           <b>Input Selection</b>
           <div style={{
-            background: '#eee', padding: '8px 12px', borderRadius: 6, marginTop: 8,
+            background: '#eee', padding: '8px 12px', borderRadius: 8, marginTop: 8,
             borderLeft: `4px solid ${totalInputSats >= totalOutputSats ? COLORS.green : COLORS.red}`
           }}>
             <div>Required for outputs: <b>{totalOutputSats.toLocaleString()} sats</b></div>
@@ -1745,13 +1832,13 @@ const OutgoingWizard: FC<{ vault: Vault, onUpdate: () => void, notify: (t: Notif
               const tx = getTxFromStore(vault.beefStore, c.txid)
               sats = tx.outputs[c.outputIndex].satoshis as number
             } catch { }
-            return <div key={id} style={{ padding: '6px 0' }}><label>
+            return <div key={id} style={{ padding: '6px 0', wordBreak:'break-all' }}><label>
               <input type="checkbox" checked={!!manualInputs[id]} onChange={e => setManualInputs(prev => ({ ...prev, [id]: e.target.checked }))} />
               {' '}
               {id} — {sats.toLocaleString()} sats ({(sats / 100000000).toFixed(8)} BSV)
             </label></div>
           })}
-          <div style={{ marginTop: 10, display: 'flex', justifyContent: 'space-between', gap: 8 }}>
+          <div style={{ marginTop: 10, display: 'grid', gap: 8, gridTemplateColumns: '1fr 1fr' }}>
             <button onClick={() => setStep(1)} style={btnGhostStyle}>Back</button>
             <button onClick={nextFromInputs} style={btnStyle}>Next: Choose Change</button>
           </div>
@@ -1760,7 +1847,7 @@ const OutgoingWizard: FC<{ vault: Vault, onUpdate: () => void, notify: (t: Notif
 
       {step === 3 && (
         <div>
-          <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+          <div style={{ display: 'grid', gridTemplateColumns: '1fr', gap: 8 }}>
             <div>
               <b>Change Keys</b>
               <div style={{ marginTop: 6, color: COLORS.gray600, fontSize: 12 }}>Select at least one key to receive change.</div>
@@ -1773,13 +1860,13 @@ const OutgoingWizard: FC<{ vault: Vault, onUpdate: () => void, notify: (t: Notif
             {' '}
             {k.serial} {k.memo && `— ${k.memo}`} {k.usedOnChain ? <span style={{ color: '#b36' }}> (used)</span> : <span style={{ color: COLORS.green }}>(unused)</span>}
           </label></div>)}
-          <div style={{ marginTop: 12, display: 'flex', alignItems: 'center', gap: 12, flexWrap: 'wrap' }}>
+          <div style={{ marginTop: 12, display: 'grid', alignItems: 'center', gap: 8 }}>
             {vault.confirmOutgoingCoins && (
               <label><input type="checkbox" checked={requirePerUtxoAttestation} onChange={e => setRequirePerUtxoAttestation(e.target.checked)} /> {' '}Per-UTXO Attestation</label>
             )}
-            <input placeholder="Transaction Memo (optional)" value={txMemo} onChange={e => setTxMemo(e.target.value)} style={{ ...inputStyle, maxWidth: 360 }} />
+            <input placeholder="Transaction Memo (optional)" value={txMemo} onChange={e => setTxMemo(e.target.value)} style={{ ...inputStyle }} />
           </div>
-          <div style={{ marginTop: 10, display: 'flex', justifyContent: 'space-between', gap: 8 }}>
+          <div style={{ marginTop: 10, display: 'grid', gap: 8, gridTemplateColumns: '1fr 1fr' }}>
             <button onClick={() => setStep(2)} style={btnGhostStyle}>Back</button>
             <button onClick={nextFromChange} style={btnStyle}>Next: Review & Sign</button>
           </div>
@@ -1789,16 +1876,16 @@ const OutgoingWizard: FC<{ vault: Vault, onUpdate: () => void, notify: (t: Notif
       {step === 4 && (
         <div>
           <b>Review</b>
-          <div style={{ display: 'flex', gap: 24, marginTop: 8, flexWrap: 'wrap' }}>
-            <div style={{ flex: 1, minWidth: 280 }}>
+          <div style={{ display: 'grid', gap: 12, marginTop: 8 }}>
+            <div style={{ minWidth: 0 }}>
               <div style={{ fontWeight: 600 }}>Outputs</div>
-              <div style={{ border: `1px solid ${COLORS.border}`, borderRadius: 6, padding: 8, marginTop: 6, fontFamily: 'monospace', whiteSpace: 'pre-wrap', fontSize: 12, overflowX: 'auto' }}>
+              <div style={{ border: `1px solid ${COLORS.border}`, borderRadius: 8, padding: 8, marginTop: 6, fontFamily: 'monospace', whiteSpace: 'pre-wrap', fontSize: 12, overflowX: 'auto' }}>
                 {parsedOutputs.map((o, i) => `${i + 1}. ${o.destinationAddressOrScript} ${o.satoshis}${o.memo ? ` (${o.memo})` : ''}`).join('\n')}
               </div>
             </div>
-            <div style={{ flex: 1, minWidth: 280 }}>
+            <div style={{ minWidth: 0 }}>
               <div style={{ fontWeight: 600 }}>Inputs</div>
-              <div style={{ border: `1px solid ${COLORS.border}`, borderRadius: 6, padding: 8, marginTop: 6, fontFamily: 'monospace', whiteSpace: 'pre-wrap', fontSize: 12 }}>
+              <div style={{ border: `1px solid ${COLORS.border}`, borderRadius: 8, padding: 8, marginTop: 6, fontFamily: 'monospace', whiteSpace: 'pre-wrap', fontSize: 12 }}>
                 {Object.keys(manualInputs).filter(id => manualInputs[id]).join('\n') || '—'}
               </div>
               <div style={{ marginTop: 8, fontSize: 12 }}>
@@ -1811,7 +1898,7 @@ const OutgoingWizard: FC<{ vault: Vault, onUpdate: () => void, notify: (t: Notif
             </div>
           </div>
 
-          <div style={{ marginTop: 12, display: 'flex', justifyContent: 'space-between', gap: 8 }}>
+          <div style={{ marginTop: 12, display: 'grid', gap: 8, gridTemplateColumns: '1fr 1fr' }}>
             <button onClick={() => setStep(3)} style={btnGhostStyle}>Back</button>
             <button onClick={buildAndSign} disabled={isBuilding} style={btnStyle}>{isBuilding ? 'Building...' : 'Finalize & Sign'}</button>
           </div>
@@ -1826,7 +1913,7 @@ const OutgoingWizard: FC<{ vault: Vault, onUpdate: () => void, notify: (t: Notif
           ) : (
             <div style={{ marginTop: 8 }}>No result to show.</div>
           )}
-          <div style={{ marginTop: 12, display: 'flex', justifyContent: 'flex-end' }}>
+          <div style={{ marginTop: 12, display: 'grid', justifyContent: 'end' }}>
             <button onClick={resetWizard} style={btnStyle}>Create Another</button>
           </div>
         </div>
@@ -1844,10 +1931,10 @@ const SignedBeefModalInline: FC<{ hex: string; txid: string }> = ({ hex, txid })
     URL.revokeObjectURL(url)
   }
   return (
-    <div style={{ border: `1px solid ${COLORS.border}`, borderRadius: 8, padding: 12, marginTop: 8 }}>
-      <p style={{fontSize: 12, margin: 0}}>TXID: <code>{txid}</code></p>
+    <div style={{ border: `1px solid ${COLORS.border}`, borderRadius: 12, padding: 12, marginTop: 8 }}>
+      <p style={{fontSize: 12, margin: 0, wordBreak:'break-all'}}>TXID: <code>{txid}</code></p>
       <textarea readOnly rows={8} style={{ ...inputStyle, width: '100%', marginTop: 8, fontFamily: 'monospace' }} value={hex} />
-      <div style={{ display: 'flex', justifyContent: 'flex-end', gap: 8, marginTop: 8 }}>
+      <div style={{ display: 'grid', justifyContent: 'end', gap: 8, marginTop: 8, gridTemplateColumns: '1fr 1fr', maxWidth: 360 }}>
         <button onClick={copy} style={btnGhostStyle}>Copy</button>
         <button onClick={download} style={btnStyle}>Download</button>
       </div>
@@ -1870,9 +1957,9 @@ const LogsPanel: FC<{ vault: Vault, onUpdate: () => void }> = ({ vault, onUpdate
     }
   
     const LogViewer: FC<{ log: AuditEvent[] }> = ({ log }) => (
-      <div style={{ height: 200, overflowY: 'auto', border: `1px solid ${COLORS.border}`, borderRadius: 6, padding: 8, background: '#fcfcfc', fontFamily: 'monospace', fontSize: 12 }}>
+      <div style={{ height: 200, overflowY: 'auto', border: `1px solid ${COLORS.border}`, borderRadius: 8, padding: 8, background: '#fcfcfc', fontFamily: 'monospace', fontSize: 12 }}>
         {[...log].reverse().map(e => (
-          <div key={e.at + e.event}>{`[${new Date(e.at).toISOString()}] ${e.event}${e.data ? `: ${e.data}` : ''}`}</div>
+          <div key={e.at + e.event} style={{ wordBreak:'break-all' }}>{`[${new Date(e.at).toISOString()}] ${e.event}${e.data ? `: ${e.data}` : ''}`}</div>
         ))}
       </div>
     )
@@ -1880,26 +1967,26 @@ const LogsPanel: FC<{ vault: Vault, onUpdate: () => void }> = ({ vault, onUpdate
     return (
       <section style={{ ...sectionStyle }}>
         <h2 style={{ marginTop: 0 }}>Logs</h2>
-        <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 24 }}>
+        <div style={{ display: 'grid', gridTemplateColumns: '1fr', gap: 16 }}>
           <div>
-            <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 8 }}>
-              <h3>Vault Log (Permanent)</h3>
+            <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 8, gap: 8 }}>
+              <h3 style={{ margin: 0 }}>Vault Log (Permanent)</h3>
               <button onClick={() => vault.exportVaultLog()} style={btnGhostStyle}>Download</button>
             </div>
             <LogViewer log={vault.vaultLog} />
-            <div style={{ marginTop: 8 }}>
+            <div style={{ marginTop: 8, display: 'grid', gap: 8 }}>
               <input
                 placeholder="Add custom vault log entry..."
                 value={customLogEntry}
                 onChange={e => setCustomLogEntry(e.target.value)}
-                style={{ ...inputStyle, marginBottom: 4 }}
+                style={{ ...inputStyle }}
               />
               <button onClick={addCustomLog} style={btnStyle}>Add Entry</button>
             </div>
           </div>
           <div>
-            <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 8 }}>
-              <h3>Session Log (Ephemeral)</h3>
+            <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 8, gap: 8 }}>
+              <h3 style={{ margin: 0 }}>Session Log (Ephemeral)</h3>
               <button onClick={() => vault.exportSessionLog()} style={btnGhostStyle}>Download</button>
             </div>
             <LogViewer log={vault.sessionLog} />
@@ -1909,12 +1996,16 @@ const LogsPanel: FC<{ vault: Vault, onUpdate: () => void }> = ({ vault, onUpdate
     )
   }
 
-const SettingsPanel: FC<{ vault: Vault, onUpdate: () => void }> = ({ vault, onUpdate }) => {
+const SettingsPanel: FC<{ vault: Vault, onUpdate: () => void, setLastSavedPlainHash: (h: string | null) => void }> = ({ vault, onUpdate, setLastSavedPlainHash }) => {
   const [incoming, setIncoming] = useState(vault.confirmIncomingCoins)
   const [outgoing, setOutgoing] = useState(vault.confirmOutgoingCoins)
   const [phOld, setPhOld] = useState(String(vault.persistHeadersOlderThanBlocks))
   const [rvRecent, setRvRecent] = useState(String(vault.reverifyRecentHeadersAfterSeconds))
   const [rvHeight, setRvHeight] = useState(String(vault.reverifyCurrentBlockHeightAfterSeconds))
+  const [useUserEntropy, setUseUserEntropy] = useState(vault.useUserEntropyForRandom)
+
+  const [newName, setNewName] = useState(vault.vaultName)
+
   const dialog = useDialog()
 
   async function save() {
@@ -1925,13 +2016,33 @@ const SettingsPanel: FC<{ vault: Vault, onUpdate: () => void }> = ({ vault, onUp
     vault.persistHeadersOlderThanBlocks = Number(phOld) || vault.persistHeadersOlderThanBlocks
     vault.reverifyRecentHeadersAfterSeconds = Number(rvRecent) || vault.reverifyRecentHeadersAfterSeconds
     vault.reverifyCurrentBlockHeightAfterSeconds = Number(rvHeight) || vault.reverifyCurrentBlockHeightAfterSeconds
+    vault.useUserEntropyForRandom = !!useUserEntropy
+    if (newName.trim() !== vault.vaultName) {
+      await vault.renameVault(newName.trim())
+    }
     onUpdate()
+  }
+
+  async function doChangePassword() {
+    try {
+      await vault.changePassword()
+      onUpdate()
+      // Changing password changes plaintext (salt & settings), update dirty hash baseline? No: we want to show unsaved.
+      await dialog.alert('Password updated. You must SAVE the vault file to persist the change.', 'Password Changed')
+    } catch (e: any) {
+      await dialog.alert(e.message || 'Failed to change password.', 'Error')
+    }
   }
 
   return (
     <section style={{ ...sectionStyle }}>
       <h2 style={{ marginTop: 0 }}>Settings</h2>
-      <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 16 }}>
+      <div style={{ display: 'grid', gridTemplateColumns: '1fr', gap: 12 }}>
+        <div>
+          <div style={{ fontSize: 12, color: COLORS.gray600, marginBottom: 4 }}>Vault Display Name</div>
+          <input value={newName} onChange={e => setNewName(e.target.value)} style={inputStyle} />
+        </div>
+
         <label style={{ display: 'flex', gap: 8, alignItems: 'center' }}>
           <input type="checkbox" checked={incoming} onChange={e => setIncoming(e.target.checked)} />
           Require attestation for incoming UTXOs
@@ -1940,6 +2051,11 @@ const SettingsPanel: FC<{ vault: Vault, onUpdate: () => void }> = ({ vault, onUp
           <input type="checkbox" checked={outgoing} onChange={e => setOutgoing(e.target.checked)} />
           Require attestation for outgoing UTXOs
         </label>
+        <label style={{ display: 'flex', gap: 8, alignItems: 'center' }}>
+          <input type="checkbox" checked={useUserEntropy} onChange={e => setUseUserEntropy(e.target.checked)} />
+          Require user-provided entropy for randomness (keys & salts)
+        </label>
+
         <div>
           <div style={{ fontSize: 12, color: COLORS.gray600 }}>Persist headers older than N blocks</div>
           <input value={phOld} onChange={e => setPhOld(e.target.value)} style={inputStyle} />
@@ -1952,9 +2068,11 @@ const SettingsPanel: FC<{ vault: Vault, onUpdate: () => void }> = ({ vault, onUp
           <div style={{ fontSize: 12, color: COLORS.gray600 }}>Re-verify current block height after (seconds)</div>
           <input value={rvHeight} onChange={e => setRvHeight(e.target.value)} style={inputStyle} />
         </div>
-      </div>
-      <div style={{ marginTop: 12 }}>
-        <button onClick={save} style={btnStyle}>Apply Changes</button>
+
+        <div style={{ display: 'grid', gap: 8, gridTemplateColumns: '1fr 1fr', alignItems: 'center' }}>
+          <button onClick={save} style={btnStyle}>Apply Changes</button>
+          <button onClick={doChangePassword} style={btnGhostStyle}>Change Password</button>
+        </div>
       </div>
     </section>
   )
