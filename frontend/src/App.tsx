@@ -4,6 +4,125 @@ import {
   Utils, Hash, SymmetricKey, Random, TransactionOutput, Beef
 } from '@bsv/sdk'
 
+// Centralized validation utilities for all user inputs
+export type ValidationResult = true | string
+
+// Generic helpers ------------------------------------------------------------
+export function isNonEmptyTrimmed(value: string): boolean {
+  return value.trim().length > 0
+}
+
+export function requireNonEmpty(value: string, fieldName: string, maxLen?: number): ValidationResult {
+  const v = value.trim()
+  if (!v) return `${fieldName} cannot be empty.`
+  if (typeof maxLen === 'number' && v.length > maxLen) return `${fieldName} must be at most ${maxLen} characters.`
+  return true
+}
+
+export function requireLength(value: string, fieldName: string, minLen: number, maxLen: number): ValidationResult {
+  const v = value.trim()
+  if (v.length < minLen) return `${fieldName} must be at least ${minLen} characters.`
+  if (v.length > maxLen) return `${fieldName} must be at most ${maxLen} characters.`
+  return true
+}
+
+export function requireIntegerString(value: string, fieldName: string, opts?: { min?: number; max?: number }): ValidationResult {
+  const v = value.trim()
+  if (!/^\d+$/.test(v)) return `${fieldName} must be a whole number.`
+  const n = Number(v)
+  if (!Number.isSafeInteger(n)) return `${fieldName} is not a safe integer.`
+  if (opts?.min !== undefined && n < opts.min) return `${fieldName} must be >= ${opts.min}.`
+  if (opts?.max !== undefined && n > opts.max) return `${fieldName} must be <= ${opts.max}.`
+  return true
+}
+
+export function parseInteger(value: string): number {
+  return Number(value.trim())
+}
+
+// Password policy ------------------------------------------------------------
+// Enforce strong password policy: length >= 12, with upper, lower, digit, and symbol
+export function validatePassword(value: string): ValidationResult {
+  const v = value
+  if (v.length < 12) return 'Password must be at least 12 characters.'
+  if (!/[a-z]/.test(v)) return 'Password must include at least one lowercase letter.'
+  if (!/[A-Z]/.test(v)) return 'Password must include at least one uppercase letter.'
+  if (!/\d/.test(v)) return 'Password must include at least one digit.'
+  if (!/[~`!@#$%^&*()_\-+=\[\]{};:'",.<>/?\\|]/.test(v)) return 'Password must include at least one symbol.'
+  return true
+}
+
+// Entropy input (user-provided randomness prompts)
+export function validateEntropyInput(value: string): ValidationResult {
+  const v = value.trim()
+  if (v.length < 24) return 'Please provide at least 24 characters of random input.'
+  return true
+}
+
+// Hex / IDs ------------------------------------------------------------------
+export function isHex(value: string): boolean {
+  return /^[0-9a-fA-F]+$/.test(value)
+}
+
+export function validateHex(value: string, fieldName = 'Value'): ValidationResult {
+  const v = value.trim()
+  if (!v) return `${fieldName} cannot be empty.`
+  if (!isHex(v)) return `${fieldName} must be hexadecimal.`
+  if (v.length % 2 !== 0) return `${fieldName} must have an even number of hex characters.`
+  return true
+}
+
+export function validateTxid(value: string): ValidationResult {
+  const v = value.trim()
+  if (v.length !== 64 || !isHex(v)) return 'TXID must be a 64-character hex string.'
+  return true
+}
+
+export function validateBeefHex(value: string): ValidationResult {
+  // Allow Transaction.fromAtomicBEEF to do deep structure checks; ensure hex and even length here
+  return validateHex(value, 'Atomic BEEF hex')
+}
+
+// Address / Script -----------------------------------------------------------
+const BASE58_RE = /^[123456789ABCDEFGHJKLMNPQRSTUVWXYZabcdefghijkmnopqrstuvwxyz]+$/
+
+export function validateAddressOrScript(value: string): ValidationResult {
+  const v = value.trim()
+  if (!v) return 'Destination is required.'
+  // Hex script (even-length hex, at least 20 chars)
+  if (isHex(v)) {
+    if (v.length % 2 !== 0) return 'Script hex must have an even number of characters.'
+    if (v.length < 20) return 'Script hex looks too short.'
+    return true
+  }
+  // Base58 address heuristic (26-62 chars typical)
+  if (BASE58_RE.test(v) && v.length >= 26 && v.length <= 62) return true
+  return 'Destination must be a valid Base58 address or script hex.'
+}
+
+// Amounts / memos ------------------------------------------------------------
+export function validateSatoshis(value: string): ValidationResult {
+  const int = requireIntegerString(value, 'Satoshis', { min: 1 })
+  if (int !== true) return int
+  const n = parseInteger(value)
+  const MAX_SATS = 2_100_000_000_000_000 // 21M * 1e8
+  if (n > MAX_SATS) return `Satoshis must be <= ${MAX_SATS.toLocaleString()}.`
+  return true
+}
+
+export function validateMemo(value: string, label = 'Memo', maxLen = 256): ValidationResult {
+  if (value.length > maxLen) return `${label} must be at most ${maxLen} characters.`
+  return true
+}
+
+export function validateVaultName(value: string): ValidationResult {
+  return requireLength(value, 'Vault name', 1, 64)
+}
+
+export function validatePBKDF2Rounds(value: string): ValidationResult {
+  return requireIntegerString(value, 'PBKDF2 rounds', { min: 80000 })
+}
+
 /**
  * =============================================================================
  * Lightweight UI & Dialog System (no window.* usage anywhere)
@@ -96,26 +215,36 @@ const Modal: FC<{ title: string, children: ReactNode, onClose: () => void }> = (
 type DialogRequest =
   | { kind: 'alert'; title?: string; message: string; resolve: () => void }
   | { kind: 'confirm'; title?: string; message: string; confirmText?: string; cancelText?: string; resolve: (ok: boolean) => void }
-  | { kind: 'prompt'; title?: string; message: string; password?: boolean; defaultValue?: string; resolve: (val: string | null) => void }
+  | { kind: 'prompt'; title?: string; message: string; password?: boolean; defaultValue?: string; placeholder?: string; maxLength?: number; validate?: (val: string) => true | string; resolve: (val: string | null) => void }
 
 type DialogAPI = {
   alert(msg: string, title?: string): Promise<void>
   confirm(msg: string, opts?: { title?: string; confirmText?: string; cancelText?: string }): Promise<boolean>
-  prompt(msg: string, opts?: { title?: string; password?: boolean; defaultValue?: string }): Promise<string | null>
+  prompt(msg: string, opts?: { title?: string; password?: boolean; defaultValue?: string; placeholder?: string; maxLength?: number; validate?: (val: string) => true | string }): Promise<string | null>
 }
 
 const DialogCtx = createContext<DialogAPI | null>(null)
 
 const PromptDialog: FC<{ req: DialogRequest & { kind: 'prompt' }; onResolve: (val: string | null) => void }> = ({ req, onResolve }) => {
   const [val, setVal] = useState(req.defaultValue || '')
+  const [error, setError] = useState<string | null>(null)
 
   // Reset the value if the request changes, ensuring the input is fresh
   useEffect(() => {
     setVal(req.defaultValue || '')
+    setError(null)
   }, [req])
 
   const handleSubmit = (e: React.FormEvent) => {
     e.preventDefault()
+    // Run optional validation; if invalid, show error and keep dialog open
+    if (req.validate) {
+      const res = req.validate(val)
+      if (res !== true) {
+        setError(typeof res === 'string' ? res : 'Invalid input.')
+        return
+      }
+    }
     onResolve(val)
   }
 
@@ -132,9 +261,19 @@ const PromptDialog: FC<{ req: DialogRequest & { kind: 'prompt' }; onResolve: (va
           autoComplete='off'
           value={val}
           onChange={e => setVal(e.target.value)}
+          placeholder={req.placeholder}
+          maxLength={req.maxLength}
           style={{ ...inputStyle, marginTop: 8 }}
           autoFocus
         />
+        {req.password && (
+          <div style={{ marginTop: 6, fontSize: 12, color: COLORS.gray600 }}>
+            Minimum 12 chars with upper, lower, digit, and symbol.
+          </div>
+        )}
+        {!!error && (
+          <div style={{ marginTop: 6, fontSize: 12, color: COLORS.red }}>{error}</div>
+        )}
         <div style={{ display: 'flex', justifyContent: 'flex-end', marginTop: 12, gap: 8, flexWrap: 'wrap' }}>
           <button type="button" onClick={() => onResolve(null)} style={btnGhostStyle}>Cancel</button>
           <button type="submit" style={btnStyle}>Submit</button>
@@ -215,7 +354,7 @@ export const DialogProvider: FC<{ children: ReactNode }> = ({ children }) => {
       confirmText: opts?.confirmText,
       cancelText: opts?.cancelText
     }),
-    prompt: (message, opts) => push<string | null>({ kind: 'prompt', title: opts?.title, message, password: opts?.password, defaultValue: opts?.defaultValue })
+    prompt: (message, opts) => push<string | null>({ kind: 'prompt', title: opts?.title, message, password: opts?.password, defaultValue: opts?.defaultValue, placeholder: opts?.placeholder, maxLength: opts?.maxLength, validate: opts?.validate })
   }
   return (
     <DialogCtx.Provider value={api}>
@@ -243,7 +382,7 @@ type UnixMs = number
 type UiBridge = {
   alert: (msg: string, title?: string) => Promise<void>
   confirm: (msg: string, title?: string) => Promise<boolean>
-  prompt: (msg: string, opts?: { title?: string; password?: boolean; defaultValue?: string }) => Promise<string | null>
+  prompt: (msg: string, opts?: { title?: string; password?: boolean; defaultValue?: string; placeholder?: string; maxLength?: number; validate?: (val: string) => true | string }) => Promise<string | null>
 }
 
 /** A serializable, sanitized session/vault event. */
@@ -403,11 +542,11 @@ class Vault implements ChainTracker {
     // Ask the user for extra entropy in a simple modal flow
     const part1 = (await this.ui.prompt(
       'Type or paste a bunch of random characters (keyboard mashing, dice rolls, book numbers, etc).',
-      { title: 'Entropy Input — Part 1' }
+      { title: 'Entropy Input — Part 1', validate: validateEntropyInput, placeholder: 'At least 24 random characters' }
     )) || ''
     const part2 = (await this.ui.prompt(
       'Again (different source than before).',
-      { title: 'Entropy Input — Part 2' }
+      { title: 'Entropy Input — Part 2', validate: validateEntropyInput, placeholder: 'At least 24 random characters' }
     )) || ''
 
     const userSeed = Utils.toArray(part1 + '|' + part2, 'utf8')
@@ -481,7 +620,7 @@ class Vault implements ChainTracker {
       this.logVault('chain.header.ephemeral', `h=${height} root=${root}`)
       this.logSession('chain.header.ephemeral', `h=${height} root=${root}`)
     } else {
-      let memo = await this.ui.prompt('Enter the source(s) used to confirm this merkle root:', { title: 'Merkle Root Memo' })
+      let memo = await this.ui.prompt('Enter the source(s) used to confirm this merkle root:', { title: 'Merkle Root Memo', maxLength: 256, validate: (v) => validateMemo(v, 'Memo', 256) })
       if (!memo) memo = 'No memo provided.'
       this.persistedHeaderClaims.push({ at: Date.now(), merkleRoot: root, height, memo })
       this.logVault('chain.header.persisted', `h=${height} root=${root} memo=${memo}`)
@@ -500,7 +639,7 @@ class Vault implements ChainTracker {
     let height = 0
     do {
       try {
-        const input = await this.ui.prompt('Enter the current block height for the HONEST chain:', { title: 'Block Height' })
+        const input = await this.ui.prompt('Enter the current block height for the HONEST chain:', { title: 'Block Height', validate: (v) => requireIntegerString(v, 'Block height', { min: 1 }) })
         const n = Number(input)
         if (Number.isInteger(n) && n > 0) height = n
         else await this.ui.alert('Height must be a positive integer, try again.', 'Invalid Input')
@@ -525,7 +664,7 @@ class Vault implements ChainTracker {
     v.vaultName = name
     v.logVault('vault.created', name)
 
-    const roundsIn = await ui.prompt(`PBKDF2 rounds? (default ${v.passwordRounds})`, { title: 'PBKDF2 Rounds', defaultValue: String(v.passwordRounds) })
+    const roundsIn = await ui.prompt(`PBKDF2 rounds? (default ${v.passwordRounds})`, { title: 'PBKDF2 Rounds', defaultValue: String(v.passwordRounds), validate: validatePBKDF2Rounds })
     if (roundsIn && /^\d+$/.test(roundsIn)) {
       const n = Number(roundsIn)
       if (n >= 1) v.passwordRounds = n
@@ -538,7 +677,7 @@ class Vault implements ChainTracker {
     v.useUserEntropyForRandom = await ui.confirm('Require user-provided entropy whenever randomness is needed? (Recommended if you distrust device RNG)', 'Randomness Policy')
 
     // Require password once, derive and cache key
-    const pw = (await ui.prompt('Set a password for this vault file (required):', { title: 'Vault Password', password: true })) || ''
+    const pw = (await ui.prompt('Set a password for this vault file (required):', { title: 'Vault Password', password: true, validate: validatePassword, maxLength: 1024 })) || ''
     if (!pw) throw new Error('Password required to create vault.')
     const keyBytes = Hash.pbkdf2(Utils.toArray(pw), v.passwordSalt, v.passwordRounds, 32)
     v.encryptionKey = new SymmetricKey(keyBytes)
@@ -551,11 +690,11 @@ class Vault implements ChainTracker {
     v.logKV('vault', 'confirmOutgoingCoins', String(v.confirmOutgoingCoins))
 
     // Header settings
-    const older = await ui.prompt(`Persist headers older than how many blocks? (default ${v.persistHeadersOlderThanBlocks})`, { title: 'Header Persistence', defaultValue: String(v.persistHeadersOlderThanBlocks) })
+    const older = await ui.prompt(`Persist headers older than how many blocks? (default ${v.persistHeadersOlderThanBlocks})`, { title: 'Header Persistence', defaultValue: String(v.persistHeadersOlderThanBlocks), validate: (val) => requireIntegerString(val, 'Persist headers', { min: 0 }) })
     if (older && /^\d+$/.test(older)) v.persistHeadersOlderThanBlocks = Number(older)
-    const recentSec = await ui.prompt(`Re-verify recent headers after how many seconds? (default ${v.reverifyRecentHeadersAfterSeconds})`, { title: 'Re-verify Recent Headers', defaultValue: String(v.reverifyRecentHeadersAfterSeconds) })
+    const recentSec = await ui.prompt(`Re-verify recent headers after how many seconds? (default ${v.reverifyRecentHeadersAfterSeconds})`, { title: 'Re-verify Recent Headers', defaultValue: String(v.reverifyRecentHeadersAfterSeconds), validate: (val) => requireIntegerString(val, 'Re-verify recent headers (seconds)', { min: 1 }) })
     if (recentSec && /^\d+$/.test(recentSec)) v.reverifyRecentHeadersAfterSeconds = Number(recentSec)
-    const heightSec = await ui.prompt(`Re-verify current block height after how many seconds? (default ${v.reverifyCurrentBlockHeightAfterSeconds})`, { title: 'Re-verify Height', defaultValue: String(v.reverifyCurrentBlockHeightAfterSeconds) })
+    const heightSec = await ui.prompt(`Re-verify current block height after how many seconds? (default ${v.reverifyCurrentBlockHeightAfterSeconds})`, { title: 'Re-verify Height', defaultValue: String(v.reverifyCurrentBlockHeightAfterSeconds), validate: (val) => requireIntegerString(val, 'Re-verify height (seconds)', { min: 1 }) })
     if (heightSec && /^\d+$/.test(heightSec)) v.reverifyCurrentBlockHeightAfterSeconds = Number(heightSec)
 
     v.logSession('wizard.complete', 'create')
@@ -677,12 +816,12 @@ class Vault implements ChainTracker {
   async changePassword(): Promise<void> {
     assert(this.encryptionKey, 'Encryption key not initialized.')
 
-    const newPw = await this.ui.prompt('Enter NEW password:', { title: 'Change Password', password: true })
+    const newPw = await this.ui.prompt('Enter NEW password:', { title: 'Change Password', password: true, validate: validatePassword, maxLength: 1024 })
     if (!newPw) throw new Error('Password change cancelled or empty.')
     const confirmPw = await this.ui.prompt('Re-enter NEW password:', { title: 'Confirm New Password', password: true })
     if (newPw !== confirmPw) throw new Error('Passwords do not match.')
 
-    const roundsIn = await this.ui.prompt(`PBKDF2 rounds? (default ${this.passwordRounds})`, { title: 'PBKDF2 Rounds', defaultValue: String(this.passwordRounds) })
+    const roundsIn = await this.ui.prompt(`PBKDF2 rounds? (default ${this.passwordRounds})`, { title: 'PBKDF2 Rounds', defaultValue: String(this.passwordRounds), validate: validatePBKDF2Rounds })
     let rounds = this.passwordRounds
     if (roundsIn && /^\d+$/.test(roundsIn)) {
       const n = Number(roundsIn)
@@ -1173,6 +1312,16 @@ function AppInner () {
   async function onOpenVault (file: File) {
     setIsLoading(true);
     try {
+      // Basic file validation: non-empty, expected extension
+      if (!file || file.size === 0) throw new Error('Selected file is empty.')
+      if (!file.name.endsWith('.vaultfile')) {
+        const cont = await dialog.confirm(`The selected file (${file.name}) does not have the .vaultfile extension. Continue anyway?`, {
+          title: 'Unrecognized Extension',
+          confirmText: 'Continue',
+          cancelText: 'Cancel'
+        })
+        if (!cont) return
+      }
       const buf = new Uint8Array(await file.arrayBuffer())
       const v = await Vault.loadFromFile(dialog, Array.from(buf))
       setVault(v)
@@ -1527,9 +1676,9 @@ const KeyManager: FC<{ vault: Vault, onUpdate: () => void, notify: (type: Notifi
     <section style={{ ...sectionStyle }}>
       <h2 style={{ marginTop: 0 }}>Keys ({vault.keys.length})</h2>
       <div style={{ display: 'grid', gap: 8 }}>
-        <button
+              <button
           onClick={async () => {
-            const memo = (await dialog.prompt('Memo for this key (optional):', { title: 'Key Memo' })) || ''
+            const memo = (await dialog.prompt('Memo for this key (optional):', { title: 'Key Memo', maxLength: 256, validate: (v) => validateMemo(v, 'Memo', 256) })) || ''
             await vault.generateKey(memo); onUpdate()
           }}
           style={btnStyle}
@@ -1576,6 +1725,8 @@ const IncomingManager: FC<{ vault: Vault, onPreview: (p: IncomingPreview) => voi
 
   async function handlePreview() {
     if (!hex.trim()) { onError('BEEF hex cannot be empty.'); return }
+    const v = validateBeefHex(hex)
+    if (v !== true) { onError(typeof v === 'string' ? v : 'Invalid Atomic BEEF hex.'); return }
     setIsProcessing(true)
     try {
       const previewData = await vault.previewIncoming(hex)
@@ -1659,6 +1810,7 @@ const ProcessIncomingModal: FC<{
             style={{...inputStyle, marginTop: 6}}
             value={memos[m.outputIndex] || ''}
             onChange={e => setMemos(prev => ({...prev, [m.outputIndex]: e.target.value}))}
+            maxLength={256}
           />
         </div>
       ))}
@@ -1679,6 +1831,7 @@ const ProcessIncomingModal: FC<{
         style={{...inputStyle, marginTop: 12}}
         value={txMemo}
         onChange={e => setTxMemo(e.target.value)}
+        maxLength={256}
       />
 
       <div style={{marginTop: 12, display: 'flex', justifyContent: 'flex-end', gap: 8, flexWrap:'wrap'}}>
@@ -1775,13 +1928,16 @@ const OutgoingWizard: FC<{ vault: Vault, onUpdate: () => void, notify: (t: Notif
         // Skip completely empty rows silently
         if (!dest && !satStr && !memo) continue
 
-        const sat = Number(satStr)
         if (!dest) {
           throw new Error('An output is missing a destination address or script.')
         }
-        if (!Number.isInteger(sat) || sat <= 0) {
-          throw new Error(`Invalid satoshi amount for destination "${dest.slice(0, 20)}...". Must be a positive integer.`)
-        }
+        const destOk = validateAddressOrScript(dest)
+        if (destOk !== true) throw new Error(destOk)
+        const satOk = validateSatoshis(satStr)
+        if (satOk !== true) throw new Error(typeof satOk === 'string' ? satOk : 'Invalid satoshi amount.')
+        const sat = Number(satStr)
+        const memoOk = validateMemo(memo, 'Memo', 256)
+        if (memoOk !== true) throw new Error(memoOk)
 
         specs.push({ destinationAddressOrScript: dest, satoshis: sat, memo: memo || undefined })
       }
@@ -1855,7 +2011,7 @@ const OutgoingWizard: FC<{ vault: Vault, onUpdate: () => void, notify: (t: Notif
   }
 
   async function handleGenerateNewChangeKey() {
-    const memo = await dialog.prompt('Enter a memo for the new change key:', { title: 'New Key' })
+    const memo = await dialog.prompt('Enter a memo for the new change key:', { title: 'New Key', maxLength: 256, validate: (v) => validateMemo(v, 'Memo', 256) })
     if (memo === null) return // User cancelled
     await vault.generateKey(memo || '')
     onUpdate() // This will cause the component to get the new key list
@@ -1956,12 +2112,15 @@ const OutgoingWizard: FC<{ vault: Vault, onUpdate: () => void, notify: (t: Notif
                   autoComplete="off"
                 />
                 <input
-                  type="number"
+                  type="text"
+                  inputMode="numeric"
+                  pattern="[0-9]*"
                   placeholder="Satoshis"
                   value={output.satoshis}
                   onChange={(e) => handleOutputChange(index, 'satoshis', e.target.value)}
                   style={{ ...inputStyle }}
                   autoComplete="off"
+                  maxLength={16}
                 />
                 <input
                   placeholder="Memo (optional)"
@@ -1969,6 +2128,7 @@ const OutgoingWizard: FC<{ vault: Vault, onUpdate: () => void, notify: (t: Notif
                   onChange={(e) => handleOutputChange(index, 'memo', e.target.value)}
                   style={{ ...inputStyle }}
                   autoComplete="off"
+                  maxLength={256}
                 />
                 <button onClick={() => removeOutput(index)} disabled={outputs.length <= 1} style={btnRemoveStyle}>
                   &times;
@@ -2177,6 +2337,16 @@ const SettingsPanel: FC<{ vault: Vault, onUpdate: () => void, setLastSavedPlainH
   const dialog = useDialog()
 
   async function save() {
+    // Validate inputs first
+    const nameOk = validateVaultName(newName)
+    if (nameOk !== true) { await dialog.alert(typeof nameOk === 'string' ? nameOk : 'Invalid vault name.', 'Invalid Name'); return }
+    const phOk = requireIntegerString(phOld, 'Persist headers (blocks)', { min: 0 })
+    if (phOk !== true) { await dialog.alert(typeof phOk === 'string' ? phOk : 'Invalid number.', 'Invalid Setting'); return }
+    const rvROk = requireIntegerString(rvRecent, 'Re-verify recent headers (seconds)', { min: 1 })
+    if (rvROk !== true) { await dialog.alert(typeof rvROk === 'string' ? rvROk : 'Invalid number.', 'Invalid Setting'); return }
+    const rvHOk = requireIntegerString(rvHeight, 'Re-verify height (seconds)', { min: 1 })
+    if (rvHOk !== true) { await dialog.alert(typeof rvHOk === 'string' ? rvHOk : 'Invalid number.', 'Invalid Setting'); return }
+
     const ok = await dialog.confirm('Are you sure you want to apply these settings? This will mark the vault as having unsaved changes.', {
       title: 'Confirm Settings',
       confirmText: 'Apply Settings',
@@ -2185,9 +2355,9 @@ const SettingsPanel: FC<{ vault: Vault, onUpdate: () => void, setLastSavedPlainH
     if (!ok) return
     vault.confirmIncomingCoins = !!incoming
     vault.confirmOutgoingCoins = !!outgoing
-    vault.persistHeadersOlderThanBlocks = Number(phOld) || vault.persistHeadersOlderThanBlocks
-    vault.reverifyRecentHeadersAfterSeconds = Number(rvRecent) || vault.reverifyRecentHeadersAfterSeconds
-    vault.reverifyCurrentBlockHeightAfterSeconds = Number(rvHeight) || vault.reverifyCurrentBlockHeightAfterSeconds
+    vault.persistHeadersOlderThanBlocks = parseInteger(phOld)
+    vault.reverifyRecentHeadersAfterSeconds = parseInteger(rvRecent)
+    vault.reverifyCurrentBlockHeightAfterSeconds = parseInteger(rvHeight)
     vault.useUserEntropyForRandom = !!useUserEntropy
     if (newName.trim() !== vault.vaultName) {
       await vault.renameVault(newName.trim())
@@ -2212,7 +2382,7 @@ const SettingsPanel: FC<{ vault: Vault, onUpdate: () => void, setLastSavedPlainH
       <div style={{ display: 'grid', gridTemplateColumns: '1fr', gap: 12 }}>
         <div>
           <div style={{ fontSize: 12, color: COLORS.gray600, marginBottom: 4 }}>Vault Display Name</div>
-          <input value={newName} onChange={e => setNewName(e.target.value)} style={inputStyle} autoComplete="off" />
+          <input value={newName} onChange={e => setNewName(e.target.value)} style={inputStyle} autoComplete="off" maxLength={64} />
         </div>
 
         <label style={{ display: 'flex', gap: 8, alignItems: 'center' }}>
@@ -2230,15 +2400,15 @@ const SettingsPanel: FC<{ vault: Vault, onUpdate: () => void, setLastSavedPlainH
 
         <div>
           <div style={{ fontSize: 12, color: COLORS.gray600 }}>Persist headers older than N blocks</div>
-          <input value={phOld} onChange={e => setPhOld(e.target.value)} style={inputStyle} autoComplete="off" />
+          <input type="text" inputMode="numeric" pattern="[0-9]*" value={phOld} onChange={e => setPhOld(e.target.value)} style={inputStyle} autoComplete="off" maxLength={10} />
         </div>
         <div>
           <div style={{ fontSize: 12, color: COLORS.gray600 }}>Re-verify recent headers after (seconds)</div>
-          <input value={rvRecent} onChange={e => setRvRecent(e.target.value)} style={inputStyle} autoComplete="off" />
+          <input type="text" inputMode="numeric" pattern="[0-9]*" value={rvRecent} onChange={e => setRvRecent(e.target.value)} style={inputStyle} autoComplete="off" maxLength={10} />
         </div>
         <div>
           <div style={{ fontSize: 12, color: COLORS.gray600 }}>Re-verify current block height after (seconds)</div>
-          <input value={rvHeight} onChange={e => setRvHeight(e.target.value)} style={inputStyle} autoComplete="off" />
+          <input type="text" inputMode="numeric" pattern="[0-9]*" value={rvHeight} onChange={e => setRvHeight(e.target.value)} style={inputStyle} autoComplete="off" maxLength={10} />
         </div>
 
         <div style={{ display: 'grid', gap: 8, gridTemplateColumns: '1fr 1fr', alignItems: 'center' }}>
