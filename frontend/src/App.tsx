@@ -119,12 +119,17 @@ const PromptDialog: FC<{ req: DialogRequest & { kind: 'prompt' }; onResolve: (va
     onResolve(val)
   }
 
+  // Randomize a name attribute to further avoid password-manager heuristics
+  const randomName = useMemo(() => `fld_${Math.random().toString(36).slice(2)}`, [])
+
   return (
     <Modal title={req.title || 'Input required'} onClose={() => onResolve(null)}>
-      <form onSubmit={handleSubmit}>
+      <form onSubmit={handleSubmit} autoComplete="off">
         <p style={{ whiteSpace: 'pre-wrap' }}>{req.message}</p>
         <input
           type={req.password ? 'password' : 'text'}
+          name={randomName}
+          autoComplete='off'
           value={val}
           onChange={e => setVal(e.target.value)}
           style={{ ...inputStyle, marginTop: 8 }}
@@ -587,7 +592,7 @@ class Vault implements ChainTracker {
       }
     } while (decrypted.length === 0)
 
-    v.deserializePlaintext(decrypted, proto)
+    v.deserializePlaintext(decrypted)
     v.logSession('vault.load.ok')
     await v.currentHeight() // Prompt for block height on load
     return v
@@ -619,6 +624,12 @@ class Vault implements ChainTracker {
     const bytes = writer.toArray() as number[]
     this.saved = true
     return bytes
+  }
+
+  /** Export a specific transaction's Atomic BEEF by txid (throws if not found). */
+  exportAtomicBEEFHexByTxid (txid: string): string {
+    const tx = getTxFromStore(this.beefStore, txid)
+    return Utils.toHex(tx.toAtomicBEEF() as number[])
   }
 
   async downloadVaultFileAndCertify (): Promise<boolean> {
@@ -935,6 +946,7 @@ Instructions:
     txMemo?: string
     admit: Record<number, boolean>
     perUtxoMemo: Record<number, string>
+    processed?: boolean
   }): Promise<{ admitted: string[]; txid: string }> {
     const txid = tx.id('hex') as string
     const allMatches = this.matchOurOutputs(tx)
@@ -962,7 +974,7 @@ Instructions:
 
     const netIn = admitted.reduce((n, a) => n + a.satoshis, 0)
     this.transactionLog.push({
-      at: Date.now(), txid, net: netIn, memo: opts?.txMemo || '', processed: false
+      at: Date.now(), txid, net: netIn, memo: opts?.txMemo || '', processed: !!opts.processed
     })
     this.logVault('incoming.accepted', `${txid}:${admitted.map(a => a.outputIndex).join(',')}`)
     return { admitted: admitted.map(a => `${txid}:${a.outputIndex}`), txid }
@@ -1057,6 +1069,9 @@ Instructions:
       if (!out.change) return
       const ser = idxToKeySerial.get(outputIndex) as string
       this.coins.push({ txid, outputIndex, memo: 'change', keySerial: ser })
+      // mark change key as used to avoid accidental reuse
+      const key = this.keys.find(k => k.serial === ser)
+      if (key) key.usedOnChain = true
       changeIds.push(`${txid}:${outputIndex}`)
     })
 
@@ -1179,10 +1194,73 @@ function AppInner () {
     }
   }
 
+  // Pre-save enforcement: require users to download & set processed statuses for all pending outgoings,
+  // and explicitly record processed states for all unprocessed transactions.
+  async function enforcePendingBeforeSave (v: Vault): Promise<boolean> {
+    // Handle all unprocessed outgoing txs first
+    const outgoingPending = v.transactionLog.filter(t => t.net < 0 && !t.processed)
+    for (const t of outgoingPending) {
+      await dialog.alert(
+        `Before saving, you must securely export the Atomic BEEF for your pending outgoing transaction:\n\nTXID: ${t.txid}\n\nThis ensures you can broadcast/recover if interrupted.`,
+        'Pending Outgoing Transaction'
+      )
+      const beefHex = (() => {
+        try { return v.exportAtomicBEEFHexByTxid(t.txid) } catch { return null }
+      })()
+      if (!beefHex) {
+        await dialog.alert('Could not reconstruct the Atomic BEEF from the vault store. This should not happen. Aborting save.', 'Export Error')
+        return false
+      }
+      const download = await dialog.confirm('Download the Atomic BEEF file now?', 'Download Required')
+      if (!download) return false
+      try {
+        const blob = new Blob([beefHex], { type: 'text/plain' })
+        const url = URL.createObjectURL(blob)
+        const a = document.createElement('a')
+        a.href = url
+        a.download = `tx_${t.txid}.atomic-beef.txt`
+        a.click()
+        URL.revokeObjectURL(url)
+      } catch {
+        await dialog.alert('Download failed. Please try again.', 'Download Error')
+        return false
+      }
+      const processed = await dialog.confirm('Has this outgoing transaction been broadcast and processed on the network?', 'Processed Status')
+      v.markProcessed(t.txid, processed)
+    }
+
+    // Now ask for all remaining unprocessed (including incoming) to be explicitly classified
+    const remaining = v.transactionLog.filter(t => !t.processed)
+    for (const t of remaining) {
+      const incoming = t.net >= 0
+      const ok = await dialog.confirm(
+        `${incoming ? 'Incoming' : 'Outgoing'} TX ${t.txid}\n\nHas this transaction processed on the network?`,
+        'Confirm Processed Status'
+      )
+      v.markProcessed(t.txid, ok)
+    }
+
+    // Ensure no unprocessed outgoing remain
+    const stillPendingOutgoing = v.transactionLog.some(t => t.net < 0 && !t.processed)
+    if (stillPendingOutgoing) {
+      await dialog.alert('You still have pending outgoing transactions without a clear processed status. Resolve them before saving.', 'Save Blocked')
+      return false
+    }
+    return true
+  }
+
   async function onSaveVault () {
     if (!vault) return
     setIsLoading(true);
     try {
+      // Enforce pending outgoing management & explicit processed statuses BEFORE saving
+      const okToSave = await enforcePendingBeforeSave(vault)
+      if (!okToSave) {
+        notify('error', 'Save cancelled. Resolve all pending items as instructed.')
+        setIsLoading(false)
+        return
+      }
+
       const certified = await vault.downloadVaultFileAndCertify()
       if (certified) {
         // Post-save "logout"
@@ -1243,14 +1321,17 @@ function AppInner () {
                 <button onClick={onNewVault} style={btnStyle}>Create New Vault</button>
               </div>
             </section>
-            <p style={{ color: COLORS.gray600, marginTop: 12 }}>Open an existing vault or create a new one.</p>
-            <p>Legal notice: Any use of this tool is at your own risk. No other party assumes any risk. By using this tool, you expressly agree that there are no warranties, express or implied.</p>
-            <h1>Ty Everett begs you...</h1>
-            <p>Please wait for the official release before using this.</p>
-            <p>Please only use this in accordance with the Vault Operator's Manual.</p>
-            <p>Please wait for an external audit to be provided on the version you are using.</p>
-            <p>Please hire a vault operator who has undergone the industry standard training before they manage your funds using this system.</p>
-            <p>Please only broadcast and process transactions you have inspected in multiple external tools so that you are confident the results will be consistent with your intentions and expectations.</p>
+
+            <section style={{ ...sectionStyle, marginTop: 12 }}>
+              <h2 style={{ marginTop: 0 }}>Important Notices</h2>
+              <p><b>Offline, High-Value Security Tool.</b> This software is designed for secure, offline management of BSV funds using SPV and Atomic BEEF data.</p>
+              <p><b>No Warranties. Use At Your Own Risk.</b> This software is provided “AS IS,” without warranties of any kind, express or implied, including without limitation merchantability, fitness for a particular purpose, title, and noninfringement. You assume all risks associated with its use.</p>
+              <p><b>Operational Discipline Required.</b> Always verify transactions in multiple external tools, follow the Vault Operator’s Manual, and employ trained operators for custody operations. Do not broadcast or process transactions you have not independently verified.</p>
+              <p><b>Versioning & Integrity.</b> Always save the vault file after any change, verify the file’s SHA-256 hash, and securely delete prior revisions. Maintain redundant, offline backups. Treat hash verification as mandatory for each load.</p>
+              <p><b>No Credential Storage.</b> Never store vault passwords in the browser or password managers. This application attempts to disable such prompts, but you must remain vigilant.</p>
+              <p><b>Clipboard Hijacking Risk.</b> After copying any address or script, paste into a trusted editor and compare character-by-character before use. Malware can silently rewrite clipboard contents.</p>
+              <p style={{ color: COLORS.gray600, marginTop: 8 }}>By using this software, you acknowledge and accept these terms and assume full responsibility for all outcomes.</p>
+            </section>
           </div>
         </div>
       </div>
@@ -1281,6 +1362,7 @@ function AppInner () {
               setIncomingPreview(null)
               forceAppUpdate()
               notify('success', `Transaction ${txid} processed. SAVE the vault to persist changes.`)
+              setActiveTab('dashboard')
             }}
             onError={(err) => notify('error', err)}
           />
@@ -1422,6 +1504,7 @@ const DashboardPanel: FC<{ vault: Vault, balance: number, triggerRerender: () =>
 
 const KeyManager: FC<{ vault: Vault, onUpdate: () => void, notify: (type: Notification['type'], msg: string) => void }> = ({ vault, onUpdate, notify }) => {
   const dialog = useDialog()
+  const [hoverMap, setHoverMap] = useState<Record<string, boolean>>({})
   return (
     <section style={{ ...sectionStyle }}>
       <h2 style={{ marginTop: 0 }}>Keys ({vault.keys.length})</h2>
@@ -1447,7 +1530,20 @@ const KeyManager: FC<{ vault: Vault, onUpdate: () => void, notify: (type: Notifi
               <button onClick={async () => { await vault.downloadDepositSlipTxt(k.serial); notify('info', `Deposit slip generated for ${k.serial}`) }} style={btnGhostStyle}>
                 Deposit Slip (.txt)
               </button>
-              <button onClick={() => navigator.clipboard.writeText(k.public.toAddress())} style={btnGhostStyle}>Copy Address</button>
+              <button
+                onMouseEnter={() => setHoverMap(m => ({ ...m, [k.serial]: true }))}
+                onMouseLeave={() => setHoverMap(m => ({ ...m, [k.serial]: false }))}
+                onClick={async () => {
+                  await navigator.clipboard.writeText(k.public.toAddress())
+                  await dialog.alert(
+                    `Address copied.\n\nFor your security, paste the address into a trusted editor and verify it EXACTLY matches:\n\n${k.public.toAddress()}\n\nMalware can rewrite clipboard contents. Always compare before broadcasting or sending.`,
+                    'Verify Copied Address'
+                  )
+                }}
+                style={{ ...btnGhostStyle, background: hoverMap[k.serial] ? '#555' : '#777' }}
+              >
+                Copy Address
+              </button>
             </div>
           </div>
         ))}
@@ -1492,6 +1588,7 @@ const ProcessIncomingModal: FC<{
   onSuccess: (txid: string) => void
   onError: (msg: string) => void
 }> = ({ vault, preview, onClose, onSuccess, onError }) => {
+  const dialog = useDialog()
   const needsConfirmation = vault.confirmIncomingCoins
   const allVouts = preview.matches.map(m => m.outputIndex)
   const [admit, setAdmit] = useState<Record<number, boolean>>(() =>
@@ -1508,7 +1605,9 @@ const ProcessIncomingModal: FC<{
   const handleFinalize = async () => {
     setIsFinalizing(true)
     try {
-      const res = await vault.processIncoming(preview.tx, { txMemo, admit, perUtxoMemo: memos })
+      // Require user to explicitly choose processed status for the incoming transaction
+      const processed = await dialog.confirm('Has this incoming transaction processed on the network?', 'Processed Status')
+      const res = await vault.processIncoming(preview.tx, { txMemo, admit, perUtxoMemo: memos, processed })
       onSuccess(res.txid)
     } catch (e: any) {
       onError(e.message || 'An error occurred during finalization.')
@@ -1682,12 +1781,46 @@ const OutgoingWizard: FC<{ vault: Vault, onUpdate: () => void, notify: (t: Notif
     if (totalInputSats < totalOutputSats) {
         notify('error', `Selected inputs (${totalInputSats.toLocaleString()} sats) do not cover the required output amount (${totalOutputSats.toLocaleString()} sats).`); return
     }
+
+    // Warn if any selected inputs are from unprocessed transactions
+    const unprocessedParents: string[] = []
+    for (const id of selectedIds) {
+      const [txid] = id.split(':')
+      const t = vault.transactionLog.find(tl => tl.txid === txid)
+      if (t && !t.processed) unprocessedParents.push(id)
+    }
+    if (unprocessedParents.length > 0) {
+      dialog.confirm(
+        `WARNING: You are consuming inputs from transactions not yet marked as "processed":\n\n${unprocessedParents.join('\n')}\n\nProceed anyway?`,
+        'Unprocessed Inputs Warning'
+      ).then(ok => {
+        if (ok) setStep(3)
+      })
+      return
+    }
+
     setStep(3)
   }
 
   function nextFromChange() {
     const change = Object.keys(changeSerials).filter(s => changeSerials[s])
     if (!change.length) { notify('error', 'Select at least one change key.'); return }
+
+    // Privacy warning if change key(s) already used
+    const usedSelected = change
+      .map(s => vault.keys.find(k => k.serial === s))
+      .filter(k => k?.usedOnChain)
+      .map(k => `${k!.serial}${k!.memo ? ` (${k!.memo})` : ''}`)
+    if (usedSelected.length > 0) {
+      dialog.confirm(
+        `PRIVACY WARNING: You selected change key(s) that are already used on-chain:\n\n${usedSelected.join('\n')}\n\nReusing addresses harms privacy and may leak linkage. Proceed anyway?`,
+        'Change Key Reuse'
+      ).then(ok => {
+        if (ok) setStep(4)
+      })
+      return
+    }
+
     setStep(4)
   }
 
@@ -1728,19 +1861,12 @@ const OutgoingWizard: FC<{ vault: Vault, onUpdate: () => void, notify: (t: Notif
       setBeefHex(atomicBEEFHex)
       setBeefTxid(tx.id('hex') as string)
 
-      try {
-        const blob = new Blob([atomicBEEFHex], { type: 'text/plain' })
-        const url = URL.createObjectURL(blob)
-        const a = document.createElement('a')
-        a.href = url
-        a.download = `tx_${tx.id('hex')}.atomic-beef.txt`
-        a.click()
-        URL.revokeObjectURL(url)
-      } catch {}
-
       onUpdate()
-      notify('success', 'Transaction built & signed. SAVE the vault to persist changes.')
-      await dialog.alert('Transaction created. Once you broadcast it, please go to the Dashboard and mark it as "processed".', 'Broadcast Reminder')
+      notify('success', 'Transaction built & signed. The Atomic BEEF will be exported during the SAVE process. SAVE the vault to persist changes.')
+      await dialog.alert(
+        'Next step: SAVE the vault. The SAVE process will require you to download the new Atomic BEEF, send it to the transaction recipient for processing, and confirm processed status.',
+        'Post-Sign Instructions'
+      )
       setStep(5)
     } catch (e: any) {
       notify('error', e.message || String(e))
@@ -1767,6 +1893,14 @@ const OutgoingWizard: FC<{ vault: Vault, onUpdate: () => void, notify: (t: Notif
     </div>
   )
 
+  // Helpers: Select/Deselect all inputs; "all funds available" flow
+  const selectAllInputs = () => {
+    const next: Record<string, boolean> = {}
+    vault.coins.forEach(c => { next[`${c.txid}:${c.outputIndex}`] = true })
+    setManualInputs(next)
+  }
+  const clearAllInputs = () => setManualInputs({})
+
   return (
     <section style={{ ...sectionStyle }}>
       <h2 style={{ marginTop: 0 }}>Build Outgoing Transaction (Wizard)</h2>
@@ -1785,6 +1919,7 @@ const OutgoingWizard: FC<{ vault: Vault, onUpdate: () => void, notify: (t: Notif
                   value={output.destinationAddressOrScript}
                   onChange={(e) => handleOutputChange(index, 'destinationAddressOrScript', e.target.value)}
                   style={{ ...inputStyle }}
+                  autoComplete="off"
                 />
                 <input
                   type="number"
@@ -1792,12 +1927,14 @@ const OutgoingWizard: FC<{ vault: Vault, onUpdate: () => void, notify: (t: Notif
                   value={output.satoshis}
                   onChange={(e) => handleOutputChange(index, 'satoshis', e.target.value)}
                   style={{ ...inputStyle }}
+                  autoComplete="off"
                 />
                 <input
                   placeholder="Memo (optional)"
                   value={output.memo}
                   onChange={(e) => handleOutputChange(index, 'memo', e.target.value)}
                   style={{ ...inputStyle }}
+                  autoComplete="off"
                 />
                 <button onClick={() => removeOutput(index)} disabled={outputs.length <= 1} style={btnRemoveStyle}>
                   &times;
@@ -1824,6 +1961,11 @@ const OutgoingWizard: FC<{ vault: Vault, onUpdate: () => void, notify: (t: Notif
             {totalInputSats < totalOutputSats && <div style={{ fontSize: 12, color: COLORS.red, marginTop: 4 }}>
                 You need to select at least {(totalOutputSats - totalInputSats).toLocaleString()} more sats.
             </div>}
+          </div>
+
+          <div style={{ display: 'flex', gap: 8, marginTop: 8, flexWrap: 'wrap' }}>
+            <button onClick={selectAllInputs} style={btnGhostStyle}>Select All UTXOs</button>
+            <button onClick={clearAllInputs} style={btnGhostStyle}>Clear All</button>
           </div>
 
           {vault.coins.length === 0 && <div style={{ marginTop: 8 }}>No spendable UTXOs</div>}
@@ -1866,7 +2008,7 @@ const OutgoingWizard: FC<{ vault: Vault, onUpdate: () => void, notify: (t: Notif
             {vault.confirmOutgoingCoins && (
               <label><input type="checkbox" checked={requirePerUtxoAttestation} onChange={e => setRequirePerUtxoAttestation(e.target.checked)} /> {' '}Per-UTXO Attestation</label>
             )}
-            <input placeholder="Transaction Memo (optional)" value={txMemo} onChange={e => setTxMemo(e.target.value)} style={{ ...inputStyle }} />
+            <input placeholder="Transaction Memo (optional)" value={txMemo} onChange={e => setTxMemo(e.target.value)} style={{ ...inputStyle }} autoComplete="off" />
           </div>
           <div style={{ marginTop: 10, display: 'grid', gap: 8, gridTemplateColumns: '1fr 1fr' }}>
             <button onClick={() => setStep(2)} style={btnGhostStyle}>Back</button>
@@ -1910,8 +2052,14 @@ const OutgoingWizard: FC<{ vault: Vault, onUpdate: () => void, notify: (t: Notif
       {step === 5 && (
         <div>
           <b>Result</b>
+          {/* IMPORTANT: Do not reveal Atomic BEEF here; only inform user to save */}
           {beefHex && beefTxid ? (
-            <SignedBeefModalInline hex={beefHex} txid={beefTxid} />
+            <div style={{ border: `1px solid ${COLORS.border}`, borderRadius: 12, padding: 12, marginTop: 8 }}>
+              <p style={{fontSize: 12, margin: 0, wordBreak:'break-all'}}>TXID: <code>{beefTxid}</code></p>
+              <div style={{ marginTop: 8, fontSize: 12, color: COLORS.gray600 }}>
+                The Atomic BEEF has been prepared in memory. <b>It will be made available for download during the SAVE process.</b>
+              </div>
+            </div>
           ) : (
             <div style={{ marginTop: 8 }}>No result to show.</div>
           )}
@@ -1921,26 +2069,6 @@ const OutgoingWizard: FC<{ vault: Vault, onUpdate: () => void, notify: (t: Notif
         </div>
       )}
     </section>
-  )
-}
-
-const SignedBeefModalInline: FC<{ hex: string; txid: string }> = ({ hex, txid }) => {
-  const copy = async () => { await navigator.clipboard.writeText(hex) }
-  const download = () => {
-    const blob = new Blob([hex], { type: 'text/plain' })
-    const url = URL.createObjectURL(blob)
-    const a = document.createElement('a'); a.href = url; a.download = `tx_${txid}.atomic-beef.txt`; a.click()
-    URL.revokeObjectURL(url)
-  }
-  return (
-    <div style={{ border: `1px solid ${COLORS.border}`, borderRadius: 12, padding: 12, marginTop: 8 }}>
-      <p style={{fontSize: 12, margin: 0, wordBreak:'break-all'}}>TXID: <code>{txid}</code></p>
-      <textarea readOnly rows={8} style={{ ...inputStyle, width: '100%', marginTop: 8, fontFamily: 'monospace' }} value={hex} />
-      <div style={{ display: 'grid', justifyContent: 'end', gap: 8, marginTop: 8, gridTemplateColumns: '1fr 1fr', maxWidth: 360 }}>
-        <button onClick={copy} style={btnGhostStyle}>Copy</button>
-        <button onClick={download} style={btnStyle}>Download</button>
-      </div>
-    </div>
   )
 }
 
@@ -2042,7 +2170,7 @@ const SettingsPanel: FC<{ vault: Vault, onUpdate: () => void, setLastSavedPlainH
       <div style={{ display: 'grid', gridTemplateColumns: '1fr', gap: 12 }}>
         <div>
           <div style={{ fontSize: 12, color: COLORS.gray600, marginBottom: 4 }}>Vault Display Name</div>
-          <input value={newName} onChange={e => setNewName(e.target.value)} style={inputStyle} />
+          <input value={newName} onChange={e => setNewName(e.target.value)} style={inputStyle} autoComplete="off" />
         </div>
 
         <label style={{ display: 'flex', gap: 8, alignItems: 'center' }}>
@@ -2060,15 +2188,15 @@ const SettingsPanel: FC<{ vault: Vault, onUpdate: () => void, setLastSavedPlainH
 
         <div>
           <div style={{ fontSize: 12, color: COLORS.gray600 }}>Persist headers older than N blocks</div>
-          <input value={phOld} onChange={e => setPhOld(e.target.value)} style={inputStyle} />
+          <input value={phOld} onChange={e => setPhOld(e.target.value)} style={inputStyle} autoComplete="off" />
         </div>
         <div>
           <div style={{ fontSize: 12, color: COLORS.gray600 }}>Re-verify recent headers after (seconds)</div>
-          <input value={rvRecent} onChange={e => setRvRecent(e.target.value)} style={inputStyle} />
+          <input value={rvRecent} onChange={e => setRvRecent(e.target.value)} style={inputStyle} autoComplete="off" />
         </div>
         <div>
           <div style={{ fontSize: 12, color: COLORS.gray600 }}>Re-verify current block height after (seconds)</div>
-          <input value={rvHeight} onChange={e => setRvHeight(e.target.value)} style={inputStyle} />
+          <input value={rvHeight} onChange={e => setRvHeight(e.target.value)} style={inputStyle} autoComplete="off" />
         </div>
 
         <div style={{ display: 'grid', gap: 8, gridTemplateColumns: '1fr 1fr', alignItems: 'center' }}>
