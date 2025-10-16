@@ -12,6 +12,18 @@ const root = ReactDOM.createRoot(rootElement)
 root.render(
   <>
     <style>{`
+      html, body {
+        height: 100%;
+        margin: 0;
+        overscroll-behavior: none;
+        background: #f7f7f8;
+      }
+      body {
+        overflow: hidden;
+      }
+      #root {
+        height: 100%;
+      }
       input:-webkit-autofill,
       textarea:-webkit-autofill,
       select:-webkit-autofill {

@@ -142,8 +142,27 @@ const COLORS = {
   panel: '#ffffff',
 }
 
-const appShellStyle: React.CSSProperties = { fontFamily: 'Inter, system-ui, -apple-system, Segoe UI, Roboto, sans-serif', background: COLORS.light, minHeight: '100vh', color: COLORS.gray700, colorScheme: 'light' }
-const containerStyle: React.CSSProperties = { padding: 12, maxWidth: 1180, margin: '0 auto' }
+const appShellStyle: React.CSSProperties = {
+  fontFamily: 'Inter, system-ui, -apple-system, Segoe UI, Roboto, sans-serif',
+  background: COLORS.light,
+  minHeight: '100vh',
+  height: '100%',
+  color: COLORS.gray700,
+  colorScheme: 'light',
+  overflow: 'hidden',
+  overscrollBehavior: 'none',
+  display: 'flex',
+  flexDirection: 'column'
+}
+const containerStyle: React.CSSProperties = {
+  padding: 12,
+  maxWidth: 1180,
+  margin: '0 auto',
+  width: '100%',
+  boxSizing: 'border-box',
+  flex: '1 1 auto',
+  overflowY: 'auto'
+}
 const panelStyle: React.CSSProperties = { background: COLORS.panel, border: `1px solid ${COLORS.border}`, borderRadius: 8, padding: 12, boxShadow: '0 2px 10px rgba(0,0,0,0.03)' }
 const sectionStyle: React.CSSProperties = { ...panelStyle, marginBottom: 12 }
 const btnStyle: React.CSSProperties = { background: COLORS.blue, color: 'white', border: 'none', padding: '12px 14px', borderRadius: 8, cursor: 'pointer', width: '100%', maxWidth: 240, touchAction: 'manipulation' }
@@ -153,6 +172,8 @@ const inputStyle: React.CSSProperties = {
   borderRadius: 8,
   padding: '10px 12px',
   width: '100%',
+  maxWidth: '100%',
+  boxSizing: 'border-box',
   background: '#fff',
   color: '#111',
   caretColor: '#111'
