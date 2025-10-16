@@ -643,6 +643,7 @@ class Vault implements ChainTracker {
     if (!cert3) return false
     
     await this.ui.alert('Vault saved and certified successfully. You will now be logged out for security.', 'Save Complete')
+    location.reload()
     return true
 }
 
@@ -1243,6 +1244,7 @@ function AppInner () {
               </div>
             </section>
             <p style={{ color: COLORS.gray600, marginTop: 12 }}>Open an existing vault or create a new one.</p>
+            <p>Legal notice: Any use of this tool is at your own risk. No other party assumes any risk. By using this tool, you expressly agree that there are no warranties, express or implied.</p>
             <h1>Ty Everett begs you...</h1>
             <p>Please wait for the official release before using this.</p>
             <p>Please only use this in accordance with the Vault Operator's Manual.</p>

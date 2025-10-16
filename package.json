@@ -16,12 +16,6 @@
   "license": "SEE LICENSE IN LICENSE.txt",
   "devDependencies": {
     "@bsv/cars-cli": "^1.2.9",
-    "@bsv/lars": "^1.5.4",
-    "@vitejs/plugin-react": "^4.5.1",
-    "sass-embedded": "^1.89.1",
-    "vite": "^5.4.19"
-  },
-  "dependencies": {
-    "@bsv/sdk": "^1.6.1"
+    "@bsv/lars": "^1.5.4"
   }
 }

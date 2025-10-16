@@ -22,7 +22,6 @@
     "sourceMap": true
   },
   "include": [
-    "src",
-    "src/types"
+    "src"
   ]
 }
