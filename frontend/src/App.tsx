@@ -95,12 +95,12 @@ const Modal: FC<{ title: string, children: ReactNode, onClose: () => void }> = (
 /** Dialogs ------------------------------------------------------------------ */
 type DialogRequest =
   | { kind: 'alert'; title?: string; message: string; resolve: () => void }
-  | { kind: 'confirm'; title?: string; message: string; resolve: (ok: boolean) => void }
+  | { kind: 'confirm'; title?: string; message: string; confirmText?: string; cancelText?: string; resolve: (ok: boolean) => void }
   | { kind: 'prompt'; title?: string; message: string; password?: boolean; defaultValue?: string; resolve: (val: string | null) => void }
 
 type DialogAPI = {
   alert(msg: string, title?: string): Promise<void>
-  confirm(msg: string, title?: string): Promise<boolean>
+  confirm(msg: string, opts?: { title?: string; confirmText?: string; cancelText?: string }): Promise<boolean>
   prompt(msg: string, opts?: { title?: string; password?: boolean; defaultValue?: string }): Promise<string | null>
 }
 
@@ -137,7 +137,7 @@ const PromptDialog: FC<{ req: DialogRequest & { kind: 'prompt' }; onResolve: (va
         />
         <div style={{ display: 'flex', justifyContent: 'flex-end', marginTop: 12, gap: 8, flexWrap: 'wrap' }}>
           <button type="button" onClick={() => onResolve(null)} style={btnGhostStyle}>Cancel</button>
-          <button type="submit" style={btnStyle}>OK</button>
+          <button type="submit" style={btnStyle}>Submit</button>
         </div>
       </form>
     </Modal>
@@ -181,8 +181,8 @@ const DialogHost: FC<{ queue: DialogRequest[]; setQueue: React.Dispatch<React.Se
       <Modal title={req.title || 'Confirm'} onClose={() => { req.resolve(false); close() }}>
         <p style={{ whiteSpace: 'pre-wrap' }}>{req.message}</p>
         <div style={{ display: 'flex', justifyContent: 'flex-end', marginTop: 12, gap: 8, flexWrap: 'wrap' }}>
-          <button onClick={() => { req.resolve(false); close() }} style={btnGhostStyle}>Cancel</button>
-          <button onClick={() => { req.resolve(true); close() }} style={btnStyle} autoFocus>OK</button>
+          <button onClick={() => { req.resolve(false); close() }} style={btnGhostStyle}>{req.cancelText || 'No'}</button>
+          <button onClick={() => { req.resolve(true); close() }} style={btnStyle} autoFocus>{req.confirmText || 'Yes'}</button>
         </div>
       </Modal>
     )
@@ -208,7 +208,13 @@ export const DialogProvider: FC<{ children: ReactNode }> = ({ children }) => {
 
   const api: DialogAPI = {
     alert: (message, title) => push<void>({ kind: 'alert', title, message }),
-    confirm: (message, title) => push<boolean>({ kind: 'confirm', title, message }),
+    confirm: (message, opts) => push<boolean>({
+      kind: 'confirm',
+      title: opts?.title,
+      message,
+      confirmText: opts?.confirmText,
+      cancelText: opts?.cancelText
+    }),
     prompt: (message, opts) => push<string | null>({ kind: 'prompt', title: opts?.title, message, password: opts?.password, defaultValue: opts?.defaultValue })
   }
   return (
@@ -1211,7 +1217,11 @@ function AppInner () {
         await dialog.alert('Could not reconstruct the Atomic BEEF from the vault store. This should not happen. Aborting save.', 'Export Error')
         return false
       }
-      const download = await dialog.confirm('Download the Atomic BEEF file now?', 'Download Required')
+      const download = await dialog.confirm('Download the Atomic BEEF file now?', {
+        title: 'Download Required',
+        confirmText: 'Download Now',
+        cancelText: 'Abort Save'
+      })
       if (!download) return false
       try {
         const blob = new Blob([beefHex], { type: 'text/plain' })
@@ -1225,7 +1235,11 @@ function AppInner () {
         await dialog.alert('Download failed. Please try again.', 'Download Error')
         return false
       }
-      const processed = await dialog.confirm('Has this outgoing transaction been broadcast and processed on the network?', 'Processed Status')
+      const processed = await dialog.confirm('Has this outgoing transaction been broadcast and processed on the network?', {
+        title: 'Processed Status',
+        confirmText: 'I Certify',
+        cancelText: 'Not Yet'
+      })
       v.markProcessed(t.txid, processed)
     }
 
@@ -1235,7 +1249,11 @@ function AppInner () {
       const incoming = t.net >= 0
       const ok = await dialog.confirm(
         `${incoming ? 'Incoming' : 'Outgoing'} TX ${t.txid}\n\nHas this transaction processed on the network?`,
-        'Confirm Processed Status'
+        {
+          title: 'Confirm Processed Status',
+          confirmText: 'I Certify',
+          cancelText: 'Not Yet'
+        }
       )
       v.markProcessed(t.txid, ok)
     }
@@ -1606,7 +1624,11 @@ const ProcessIncomingModal: FC<{
     setIsFinalizing(true)
     try {
       // Require user to explicitly choose processed status for the incoming transaction
-      const processed = await dialog.confirm('Has this incoming transaction processed on the network?', 'Processed Status')
+      const processed = await dialog.confirm('Has this incoming transaction processed on the network?', {
+        title: 'Processed Status',
+        confirmText: 'I Certify',
+        cancelText: 'Not Yet'
+      })
       const res = await vault.processIncoming(preview.tx, { txMemo, admit, perUtxoMemo: memos, processed })
       onSuccess(res.txid)
     } catch (e: any) {
@@ -1792,7 +1814,11 @@ const OutgoingWizard: FC<{ vault: Vault, onUpdate: () => void, notify: (t: Notif
     if (unprocessedParents.length > 0) {
       dialog.confirm(
         `WARNING: You are consuming inputs from transactions not yet marked as "processed":\n\n${unprocessedParents.join('\n')}\n\nProceed anyway?`,
-        'Unprocessed Inputs Warning'
+        {
+          title: 'Unprocessed Inputs Warning',
+          confirmText: 'Proceed Anyway',
+          cancelText: 'Review Inputs'
+        }
       ).then(ok => {
         if (ok) setStep(3)
       })
@@ -1814,7 +1840,11 @@ const OutgoingWizard: FC<{ vault: Vault, onUpdate: () => void, notify: (t: Notif
     if (usedSelected.length > 0) {
       dialog.confirm(
         `PRIVACY WARNING: You selected change key(s) that are already used on-chain:\n\n${usedSelected.join('\n')}\n\nReusing addresses harms privacy and may leak linkage. Proceed anyway?`,
-        'Change Key Reuse'
+        {
+          title: 'Change Key Reuse',
+          confirmText: 'Proceed Anyway',
+          cancelText: 'Pick Different Keys'
+        }
       ).then(ok => {
         if (ok) setStep(4)
       })
@@ -1844,7 +1874,11 @@ const OutgoingWizard: FC<{ vault: Vault, onUpdate: () => void, notify: (t: Notif
             const id = `${coin.txid}:${coin.outputIndex}`
             return await dialog.confirm(
               `ATTESTATION REQUIRED:\n\nConfirm this UTXO is unspent on the HONEST chain:\n\n${id}`,
-              'Per-UTXO Attestation'
+              {
+                title: 'Per-UTXO Attestation',
+                confirmText: 'I Certify',
+                cancelText: 'Abort Signing'
+              }
             )
           }
           : undefined
@@ -2078,7 +2112,11 @@ const LogsPanel: FC<{ vault: Vault, onUpdate: () => void }> = ({ vault, onUpdate
   
     const addCustomLog = async () => {
       if (!customLogEntry.trim()) return
-      const ok = await dialog.confirm('Are you sure you want to add this custom entry to the permanent vault log? This action cannot be undone.', 'Confirm Log Entry')
+      const ok = await dialog.confirm('Are you sure you want to add this custom entry to the permanent vault log? This action cannot be undone.', {
+        title: 'Confirm Log Entry',
+        confirmText: 'Add Entry',
+        cancelText: 'Keep Editing'
+      })
       if (ok) {
         vault.logVault('custom.entry', customLogEntry)
         setCustomLogEntry('')
@@ -2139,7 +2177,11 @@ const SettingsPanel: FC<{ vault: Vault, onUpdate: () => void, setLastSavedPlainH
   const dialog = useDialog()
 
   async function save() {
-    const ok = await dialog.confirm('Are you sure you want to apply these settings? This will mark the vault as having unsaved changes.', 'Confirm Settings')
+    const ok = await dialog.confirm('Are you sure you want to apply these settings? This will mark the vault as having unsaved changes.', {
+      title: 'Confirm Settings',
+      confirmText: 'Apply Settings',
+      cancelText: 'Keep Editing'
+    })
     if (!ok) return
     vault.confirmIncomingCoins = !!incoming
     vault.confirmOutgoingCoins = !!outgoing
