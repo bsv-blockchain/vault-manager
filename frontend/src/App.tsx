@@ -43,22 +43,11 @@ export function parseInteger(value: string): number {
 // Password policy ------------------------------------------------------------
 // Enforce strong password policy: length >= 12, with upper, lower, digit, and symbol
 export function validatePassword(value: string): ValidationResult {
-  const v = value
-  if (v.length < 12) return 'Password must be at least 12 characters.'
-  if (!/[a-z]/.test(v)) return 'Password must include at least one lowercase letter.'
-  if (!/[A-Z]/.test(v)) return 'Password must include at least one uppercase letter.'
-  if (!/\d/.test(v)) return 'Password must include at least one digit.'
-  if (!/[~`!@#$%^&*()_\-+=\[\]{};:'",.<>/?\\|]/.test(v)) return 'Password must include at least one symbol.'
+  if (value.length < 12) return 'Password must be at least 12 characters.'
   return true
 }
 
 // Entropy input (user-provided randomness prompts)
-export function validateEntropyInput(value: string): ValidationResult {
-  const v = value.trim()
-  if (v.length < 24) return 'Please provide at least 24 characters of random input.'
-  return true
-}
-
 // Hex / IDs ------------------------------------------------------------------
 export function isHex(value: string): boolean {
   return /^[0-9a-fA-F]+$/.test(value)
@@ -289,7 +278,7 @@ const PromptDialog: FC<{ req: DialogRequest & { kind: 'prompt' }; onResolve: (va
         />
         {req.password && (
           <div style={{ marginTop: 6, fontSize: 12, color: COLORS.gray600 }}>
-            Minimum 12 chars with upper, lower, digit, and symbol.
+            Minimum 12 characters. Long passphrases are encouraged; no special character requirements.
           </div>
         )}
         {!!error && (
@@ -404,6 +393,7 @@ type UiBridge = {
   alert: (msg: string, title?: string) => Promise<void>
   confirm: (msg: string, title?: string) => Promise<boolean>
   prompt: (msg: string, opts?: { title?: string; password?: boolean; defaultValue?: string; placeholder?: string; maxLength?: number; validate?: (val: string) => true | string }) => Promise<string | null>
+  gatherEntropy?: (opts: { size: number }) => Promise<number[]>
 }
 
 /** A serializable, sanitized session/vault event. */
@@ -482,6 +472,154 @@ type BuildOutgoingOptions = {
   txMemo?: string
 }
 
+type CreateVaultOptions = {
+  name: string
+  password: string
+  passwordRounds: number
+  useUserEntropyForRandom: boolean
+  confirmIncomingCoins: boolean
+  confirmOutgoingCoins: boolean
+  persistHeadersOlderThanBlocks: number
+  reverifyRecentHeadersAfterSeconds: number
+  reverifyCurrentBlockHeightAfterSeconds: number
+  initialBlockHeight: number
+}
+
+type HashRecord = {
+  fileHash: string
+  savedAt: number
+  fileName?: string
+}
+
+type BackupRecord = {
+  id: string
+  fileHash: string
+  storedAt: number
+  fileName?: string
+  hex: string
+}
+
+type LoadedFileMeta = {
+  fileHash: string
+  fileName: string | null
+  loadedAt: number
+  expectedHash?: string | null
+  mismatch?: boolean
+}
+
+type EntropyRequest = {
+  size: number
+  resolve: (bytes: number[]) => void
+  reject: (err: Error) => void
+}
+
+const STORAGE_HASHES_KEY = 'bsvvault:last-hashes'
+const STORAGE_BACKUPS_KEY = 'bsvvault:backups'
+const MAX_BACKUPS_PER_VAULT = 5
+
+function safeReadStore<T>(key: string, fallback: T): T {
+  if (typeof window === 'undefined') return fallback
+  try {
+    const raw = window.localStorage.getItem(key)
+    if (!raw) return fallback
+    return JSON.parse(raw) as T
+  } catch {
+    return fallback
+  }
+}
+
+function safeWriteStore<T>(key: string, value: T): void {
+  if (typeof window === 'undefined') return
+  try {
+    window.localStorage.setItem(key, JSON.stringify(value))
+  } catch (err) {
+    console.warn('Failed to persist vault metadata:', err)
+  }
+}
+
+function getExpectedHashRecord(plainHash: string): HashRecord | undefined {
+  const store = safeReadStore<Record<string, HashRecord>>(STORAGE_HASHES_KEY, {})
+  return store[plainHash]
+}
+
+function setExpectedHashRecord(plainHash: string, record: HashRecord): void {
+  const store = safeReadStore<Record<string, HashRecord>>(STORAGE_HASHES_KEY, {})
+  store[plainHash] = record
+  safeWriteStore(STORAGE_HASHES_KEY, store)
+}
+
+function bytesToHex(bytes: number[]): string {
+  let hex = ''
+  for (const b of bytes) {
+    hex += b.toString(16).padStart(2, '0')
+  }
+  return hex
+}
+
+function hexToBytes(hex: string): number[] {
+  const clean = hex.trim()
+  const out: number[] = []
+  for (let i = 0; i < clean.length; i += 2) {
+    const byte = clean.slice(i, i + 2)
+    out.push(parseInt(byte, 16))
+  }
+  return out
+}
+
+function getBackupsForPlain(plainHash: string): BackupRecord[] {
+  const store = safeReadStore<Record<string, BackupRecord[]>>(STORAGE_BACKUPS_KEY, {})
+  return store[plainHash] || []
+}
+
+function addBackupForPlain(plainHash: string, entry: BackupRecord): void {
+  const store = safeReadStore<Record<string, BackupRecord[]>>(STORAGE_BACKUPS_KEY, {})
+  const list = store[plainHash] || []
+  list.unshift(entry)
+  store[plainHash] = list.slice(0, MAX_BACKUPS_PER_VAULT)
+  safeWriteStore(STORAGE_BACKUPS_KEY, store)
+}
+
+function recordVaultLoadMetadata(params: {
+  plainHash: string
+  fileHash: string
+  fileName: string | null
+  bytes: number[]
+}): { expected?: HashRecord; mismatch: boolean } {
+  const { plainHash, fileHash, fileName, bytes } = params
+  const timestamp = Date.now()
+  addBackupForPlain(plainHash, {
+    id: `${timestamp}-${Math.random().toString(36).slice(2, 8)}`,
+    fileHash,
+    storedAt: timestamp,
+    fileName: fileName || undefined,
+    hex: bytesToHex(bytes)
+  })
+  const expected = getExpectedHashRecord(plainHash)
+  const mismatch = expected ? expected.fileHash !== fileHash : false
+  return { expected, mismatch }
+}
+
+function recordVaultSaveMetadata(params: {
+  plainHash: string
+  fileHash: string
+  fileName: string | null
+  bytes: number[]
+}) {
+  const timestamp = Date.now()
+  addBackupForPlain(params.plainHash, {
+    id: `${timestamp}-${Math.random().toString(36).slice(2, 8)}`,
+    fileHash: params.fileHash,
+    storedAt: timestamp,
+    fileName: params.fileName || undefined,
+    hex: bytesToHex(params.bytes)
+  })
+  setExpectedHashRecord(params.plainHash, {
+    fileHash: params.fileHash,
+    savedAt: timestamp,
+    fileName: params.fileName || undefined
+  })
+}
+
 /** Format a txid:outputIndex pair */
 function coinIdStr (txid: string, outputIndex: number): string {
   return `${txid}:${outputIndex}`
@@ -551,6 +689,8 @@ class Vault implements ChainTracker {
 
   /** UI-only flags */
   saved = false
+  lastLoadedFileHash: string | null = null
+  lastKnownFileName: string | null = null
 
   // -------------------------------------------------------------------------
   // Randomness Wizard & Helpers
@@ -558,22 +698,24 @@ class Vault implements ChainTracker {
   private async getRandomBytes(n: number): Promise<number[]> {
     // Always include device entropy
     const dev = Random(Math.max(32, n))
-    if (!this.useUserEntropyForRandom) return dev.slice(0, n)
+    if (!this.useUserEntropyForRandom || !this.ui.gatherEntropy) {
+      this.logSession('random.bytes', `n=${n} userEntropy=0`)
+      return dev.slice(0, n)
+    }
 
-    // Ask the user for extra entropy in a simple modal flow
-    const part1 = (await this.ui.prompt(
-      'Type or paste a bunch of random characters (keyboard mashing, dice rolls, book numbers, etc).',
-      { title: 'Entropy Input — Part 1', validate: validateEntropyInput, placeholder: 'At least 24 random characters' }
-    )) || ''
-    const part2 = (await this.ui.prompt(
-      'Again (different source than before).',
-      { title: 'Entropy Input — Part 2', validate: validateEntropyInput, placeholder: 'At least 24 random characters' }
-    )) || ''
+    let userBytes: number[] = []
+    try {
+      userBytes = await this.ui.gatherEntropy({ size: Math.max(64, n) })
+    } catch {
+      this.logSession('random.bytes', `n=${n} userEntropyCancelled=1`)
+      return dev.slice(0, n)
+    }
+    if (!userBytes.length) {
+      this.logSession('random.bytes', `n=${n} userEntropy=0`)
+      return dev.slice(0, n)
+    }
 
-    const userSeed = Utils.toArray(part1 + '|' + part2, 'utf8')
-    const userHash = Hash.sha256(userSeed) // 32 bytes
-
-    // Expand to n bytes using iterative hashing, mixing device entropy
+    const userHash = Hash.sha256(userBytes) // 32 bytes
     const out: number[] = []
     let counter = 0
     while (out.length < n) {
@@ -585,9 +727,8 @@ class Vault implements ChainTracker {
       out.push(...block)
       counter++
     }
-    // Final mash: xor with device entropy (cycled) to avoid user-only or device-only weakness
     const mixed = out.slice(0, n).map((b, i) => b ^ dev[i % dev.length])
-    this.logSession('random.bytes', `n=${n} userEntropy=1`)
+    this.logSession('random.bytes', `n=${n} userEntropy=1 events=${userBytes.length}`)
     return mixed
   }
 
@@ -650,6 +791,13 @@ class Vault implements ChainTracker {
     return true
   }
 
+  private recordCurrentHeight(height: number) {
+    assert(Number.isInteger(height) && height > 0, 'Block height must be a positive integer.')
+    this.currentBlockHeight = height
+    this.currentBlockHeightAcquiredAt = Date.now()
+    this.logVault('chain.height.set', String(height))
+  }
+
   async currentHeight (): Promise<number> {
     if (
       this.currentBlockHeight !== 0 &&
@@ -668,69 +816,52 @@ class Vault implements ChainTracker {
         await this.ui.alert((e as any).message || 'Error processing height, try again.', 'Error')
       }
     } while (height === 0)
-    this.currentBlockHeight = height
-    this.currentBlockHeightAcquiredAt = Date.now()
-    this.logVault('chain.height.set', String(height))
+    this.recordCurrentHeight(height)
     return height
   }
 
   // -------------------------------------------------------------------------
   // Creation / Loading / Saving (no re-prompt once key is set)
   // -------------------------------------------------------------------------
-  static async create (ui: UiBridge): Promise<Vault> {
+  static async create (ui: UiBridge, opts: CreateVaultOptions): Promise<Vault> {
     const v = new Vault(ui)
     v.logSession('wizard.start', 'create')
 
-    const name = (await ui.prompt('Enter a vault display name:', { title: 'Vault Name' })) || 'Vault'
-    v.vaultName = name
-    v.logVault('vault.created', name)
+    v.vaultName = opts.name.trim() || 'Vault'
+    v.logVault('vault.created', v.vaultName)
 
-    const roundsIn = await ui.prompt(`PBKDF2 rounds? (default ${v.passwordRounds})`, { title: 'PBKDF2 Rounds', defaultValue: String(v.passwordRounds), validate: validatePBKDF2Rounds })
-    if (roundsIn && /^\d+$/.test(roundsIn)) {
-      const n = Number(roundsIn)
-      if (n >= 1) v.passwordRounds = n
-    }
+    v.passwordRounds = opts.passwordRounds
+    v.persistHeadersOlderThanBlocks = opts.persistHeadersOlderThanBlocks
+    v.reverifyRecentHeadersAfterSeconds = opts.reverifyRecentHeadersAfterSeconds
+    v.reverifyCurrentBlockHeightAfterSeconds = opts.reverifyCurrentBlockHeightAfterSeconds
+    v.useUserEntropyForRandom = opts.useUserEntropyForRandom
+    v.confirmIncomingCoins = opts.confirmIncomingCoins
+    v.confirmOutgoingCoins = opts.confirmOutgoingCoins
+
     v.passwordSalt = await v.getRandomBytes(32)
     v.logKV('vault', 'passwordRounds', String(v.passwordRounds))
     v.logKV('vault', 'passwordSalt.len', String(v.passwordSalt.length))
 
-    // Policy: ask whether to use user entropy for future randomness
-    v.useUserEntropyForRandom = await ui.confirm('Require user-provided entropy whenever randomness is needed? (Recommended if you distrust device RNG)', 'Randomness Policy')
-
-    // Require password once, derive and cache key
-    const pw = (await ui.prompt('Set a password for this vault file (required):', { title: 'Vault Password', password: true, validate: validatePassword, maxLength: 1024 })) || ''
-    if (!pw) throw new Error('Password required to create vault.')
-    const keyBytes = Hash.pbkdf2(Utils.toArray(pw), v.passwordSalt, v.passwordRounds, 32)
+    const keyBytes = Hash.pbkdf2(Utils.toArray(opts.password), v.passwordSalt, v.passwordRounds, 32)
     v.encryptionKey = new SymmetricKey(keyBytes)
     v.logVault('vault.key.derived', `klen=${keyBytes.length}`)
 
-    // Policy toggles
-    v.confirmIncomingCoins = await ui.confirm('Require attestation for incoming UTXOs? (Recommended)', 'Incoming Attestation')
-    v.confirmOutgoingCoins = await ui.confirm('Require attestation for outgoing UTXOs?', 'Outgoing Attestation')
     v.logKV('vault', 'confirmIncomingCoins', String(v.confirmIncomingCoins))
     v.logKV('vault', 'confirmOutgoingCoins', String(v.confirmOutgoingCoins))
 
-    // Header settings
-    const older = await ui.prompt(`Persist headers older than how many blocks? (default ${v.persistHeadersOlderThanBlocks})`, { title: 'Header Persistence', defaultValue: String(v.persistHeadersOlderThanBlocks), validate: (val) => requireIntegerString(val, 'Persist headers', { min: 0 }) })
-    if (older && /^\d+$/.test(older)) v.persistHeadersOlderThanBlocks = Number(older)
-    const recentSec = await ui.prompt(`Re-verify recent headers after how many seconds? (default ${v.reverifyRecentHeadersAfterSeconds})`, { title: 'Re-verify Recent Headers', defaultValue: String(v.reverifyRecentHeadersAfterSeconds), validate: (val) => requireIntegerString(val, 'Re-verify recent headers (seconds)', { min: 1 }) })
-    if (recentSec && /^\d+$/.test(recentSec)) v.reverifyRecentHeadersAfterSeconds = Number(recentSec)
-    const heightSec = await ui.prompt(`Re-verify current block height after how many seconds? (default ${v.reverifyCurrentBlockHeightAfterSeconds})`, { title: 'Re-verify Height', defaultValue: String(v.reverifyCurrentBlockHeightAfterSeconds), validate: (val) => requireIntegerString(val, 'Re-verify height (seconds)', { min: 1 }) })
-    if (heightSec && /^\d+$/.test(heightSec)) v.reverifyCurrentBlockHeightAfterSeconds = Number(heightSec)
-
+    v.recordCurrentHeight(opts.initialBlockHeight)
     v.logSession('wizard.complete', 'create')
-    await v.currentHeight() // Prompt for initial block height
     return v
   }
 
-  static async loadFromFile (ui: UiBridge, file: number[]): Promise<Vault> {
+  static async loadFromFile (ui: UiBridge, file: number[], opts?: { fileName?: string }): Promise<Vault> {
     const v = new Vault(ui)
     v.logSession('vault.load.start', `size=${file.length}`)
 
     const fileHash = Utils.toHex(Hash.sha256(file))
     v.logSession('vault.load.hash', fileHash)
-    const ok = await ui.confirm(`Ensure the SHA-256 hash of the vault file that you stored matches:\n${fileHash}`, 'Verify Vault File Hash')
-    if (!ok) throw new Error('Vault file SHA-256 has not been verified.')
+    v.lastLoadedFileHash = fileHash
+    v.lastKnownFileName = opts?.fileName || null
 
     const r = new Utils.Reader(file)
     const proto = r.readVarIntNum()
@@ -797,32 +928,6 @@ class Vault implements ChainTracker {
     const tx = getTxFromStore(this.beefStore, txid)
     return Utils.toHex(tx.toAtomicBEEF() as number[])
   }
-
-  async downloadVaultFileAndCertify (): Promise<boolean> {
-    const bytes = await this.saveToFileBytes()
-    const hashHex = Utils.toHex(Hash.sha256(bytes))
-    const blob = new Blob([new Uint8Array(bytes)], { type: 'application/octet-stream' })
-    const url = URL.createObjectURL(blob)
-    const a = document.createElement('a')
-    a.href = url
-    a.download = `${this.vaultName.replace(/\s+/g, '_')}_rev${this.vaultRevision}_${Date.now()}.vaultfile`
-    a.click()
-    URL.revokeObjectURL(url)
-
-    // Performative Certification Flow
-    const cert1 = await this.ui.confirm('Do you certify that the new vault has been properly saved or copied into secure long-term storage?', 'Step 1: Confirm Safe Storage')
-    if (!cert1) return false
-
-    const cert2 = await this.ui.confirm(`The SHA-256 hash of the new vault is:\n\n${hashHex}\n\nDo you certify that you will save this hash and confirm it when the vault is next loaded to ensure it has not been tampered with?`, 'Step 2: Confirm Hash Verification')
-    if (!cert2) return false
-
-    const cert3 = await this.ui.confirm(`The current revision is #${this.vaultRevision}. All old vault revisions are now invalid and will not work.\n\nDo you certify that you have securely deleted all previous revisions and will only use the new one in the future?`, 'Step 3: Confirm Deletion of Old Revisions')
-    if (!cert3) return false
-    
-    await this.ui.alert('Vault saved and certified successfully. You will now be logged out for security.', 'Save Complete')
-    location.reload()
-    return true
-}
 
   // -------------------------------------------------------------------------
   // Password & Name management
@@ -1036,6 +1141,16 @@ class Vault implements ChainTracker {
     return rec
   }
 
+  async updateKeyMemo(serial: string, memo: string): Promise<void> {
+    const key = this.keys.find(k => k.serial === serial)
+    if (!key) throw new Error('Key not found.')
+    const cleaned = memo.trim()
+    const valid = validateMemo(cleaned, 'Memo', 256)
+    if (valid !== true) throw new Error(typeof valid === 'string' ? valid : 'Invalid memo.')
+    key.memo = cleaned
+    this.logVault('key.memo.updated', `${serial}:${cleaned}`)
+  }
+
   async downloadDepositSlipTxt (serial: string): Promise<void> {
     const key = this.keys.find(k => k.serial === serial)
     if (!key) throw new Error('Key not found.')
@@ -1110,7 +1225,7 @@ Instructions:
 
   async processIncoming (tx: Transaction, opts: {
     txMemo?: string
-    admit: Record<number, boolean>
+    admit?: Record<number, boolean>
     perUtxoMemo: Record<number, string>
     processed?: boolean
   }): Promise<{ admitted: string[]; txid: string }> {
@@ -1119,7 +1234,10 @@ Instructions:
 
     const admitted: typeof allMatches = []
     for (const m of allMatches) {
-      const ok = opts.admit[m.outputIndex] === true
+      const shouldAdmit = opts.admit
+        ? opts.admit[m.outputIndex] !== false
+        : true
+      const ok = shouldAdmit === true
       if (ok) admitted.push(m)
     }
 
@@ -1315,6 +1433,15 @@ function AppInner () {
   const [isLoading, setIsLoading] = useState(false)
   const [activeTab, setActiveTab] = useState<TabKey>('dashboard')
   const [appKey, setAppKey] = useState(0) // Used to force re-render of components
+  const [showCreateForm, setShowCreateForm] = useState(false)
+  const [loadedFileMeta, setLoadedFileMeta] = useState<LoadedFileMeta | null>(null)
+  const [entropyRequest, setEntropyRequest] = useState<EntropyRequest | null>(null)
+  const plainHash = lastSavedPlainHash
+  const backupEntries = useMemo(
+    () => plainHash ? getBackupsForPlain(plainHash) : [],
+    [plainHash, appKey]
+  )
+  const expectedHashRecord = plainHash ? getExpectedHashRecord(plainHash) : undefined
 
   const forceAppUpdate = useCallback(() => {
     if (vault) {
@@ -1323,6 +1450,37 @@ function AppInner () {
       setAppKey(k => k + 1)
     }
   }, [vault])
+
+  const handleDownloadBackup = useCallback((entry: BackupRecord) => {
+    try {
+      const bytes = hexToBytes(entry.hex)
+      const blob = new Blob([new Uint8Array(bytes)], { type: 'application/octet-stream' })
+      const url = URL.createObjectURL(blob)
+      const baseName = (entry.fileName || loadedFileMeta?.fileName || vault?.vaultName || 'vault').replace(/[^a-z0-9_\-\.]+/gi, '_')
+      const suffix = new Date(entry.storedAt).toISOString().replace(/[:]/g, '-')
+      const a = document.createElement('a')
+      a.href = url
+      a.download = `${baseName || 'vault'}.backup.${suffix}.vaultfile`
+      a.click()
+      URL.revokeObjectURL(url)
+      notify('info', 'Backup downloaded.')
+    } catch (err: any) {
+      notify('error', err?.message || 'Failed to download backup copy.')
+    }
+  }, [loadedFileMeta?.fileName, notify, vault])
+
+  const gatherEntropy = useCallback(({ size }: { size: number }) => {
+    return new Promise<number[]>((resolve, reject) => {
+      setEntropyRequest({ size: Math.max(64, size), resolve, reject })
+    })
+  }, [])
+
+  const uiBridge = useMemo<UiBridge>(() => ({
+    alert: dialog.alert,
+    confirm: dialog.confirm,
+    prompt: dialog.prompt,
+    gatherEntropy
+  }), [dialog.alert, dialog.confirm, dialog.prompt, gatherEntropy])
 
 
   function notify(type: Notification['type'], message: string) {
@@ -1344,10 +1502,30 @@ function AppInner () {
         if (!cont) return
       }
       const buf = new Uint8Array(await file.arrayBuffer())
-      const v = await Vault.loadFromFile(dialog, Array.from(buf))
+      const bytes = Array.from(buf)
+      const v = await Vault.loadFromFile(uiBridge, bytes, { fileName: file.name })
+      const plainHash = v.computePlaintextHash()
+      const fileHash = v.lastLoadedFileHash || Utils.toHex(Hash.sha256(bytes))
+      const meta = recordVaultLoadMetadata({
+        plainHash,
+        fileHash,
+        fileName: file.name || null,
+        bytes
+      })
       setVault(v)
-      setLastSavedPlainHash(v.computePlaintextHash())
-      notify('success', 'Vault loaded successfully.')
+      setLastSavedPlainHash(plainHash)
+      setLoadedFileMeta({
+        fileHash,
+        fileName: file.name || null,
+        loadedAt: Date.now(),
+        expectedHash: meta.expected?.fileHash || null,
+        mismatch: meta.mismatch
+      })
+      setShowCreateForm(false)
+      notify(meta.mismatch ? 'error' : 'success',
+        meta.mismatch
+          ? 'Vault loaded, but the file hash differs from the last approved version.'
+          : 'Vault loaded successfully.')
     } catch (e: any) {
       notify('error', e.message || 'Failed to load vault.')
     } finally {
@@ -1355,14 +1533,16 @@ function AppInner () {
     }
   }
 
-  async function onNewVault () {
+  async function handleCreateVault (options: CreateVaultOptions) {
     setIsLoading(true);
     try {
-      const v = await Vault.create(dialog)
+      const v = await Vault.create(uiBridge, options)
       setVault(v)
       setLastSavedPlainHash(v.computePlaintextHash())
+      setLoadedFileMeta(null)
       notify('info', 'New vault created. Generate a key to begin.')
       setActiveTab('keys')
+      setShowCreateForm(false)
     } catch (e: any) {
       notify('error', e.message || 'Failed to create vault.')
     } finally {
@@ -1373,68 +1553,23 @@ function AppInner () {
   // Pre-save enforcement: require users to download & set processed statuses for all pending outgoings,
   // and explicitly record processed states for all unprocessed transactions.
   async function enforcePendingBeforeSave (v: Vault): Promise<boolean> {
-    // Handle all unprocessed outgoing txs first
-    const outgoingPending = v.transactionLog.filter(t => t.net < 0 && !t.processed)
-    for (const t of outgoingPending) {
-      await dialog.alert(
-        `Before saving, you must securely export the Atomic BEEF for your pending outgoing transaction:\n\nTXID: ${t.txid}\n\nThis ensures you can broadcast/recover if interrupted.`,
-        'Pending Outgoing Transaction'
-      )
-      const beefHex = (() => {
-        try { return v.exportAtomicBEEFHexByTxid(t.txid) } catch { return null }
-      })()
-      if (!beefHex) {
-        await dialog.alert('Could not reconstruct the Atomic BEEF from the vault store. This should not happen. Aborting save.', 'Export Error')
-        return false
-      }
-      const download = await dialog.confirm('Download the Atomic BEEF file now?', {
-        title: 'Download Required',
-        confirmText: 'Download Now',
-        cancelText: 'Abort Save'
-      })
-      if (!download) return false
-      try {
-        const blob = new Blob([beefHex], { type: 'text/plain' })
-        const url = URL.createObjectURL(blob)
-        const a = document.createElement('a')
-        a.href = url
-        a.download = `tx_${t.txid}.atomic-beef.txt`
-        a.click()
-        URL.revokeObjectURL(url)
-      } catch {
-        await dialog.alert('Download failed. Please try again.', 'Download Error')
-        return false
-      }
-      const processed = await dialog.confirm('Has this outgoing transaction been broadcast and processed on the network?', {
-        title: 'Processed Status',
-        confirmText: 'I Certify',
-        cancelText: 'Not Yet'
-      })
-      v.markProcessed(t.txid, processed)
-    }
+    const pending = v.transactionLog.filter(t => !t.processed)
+    if (!pending.length) return true
 
-    // Now ask for all remaining unprocessed (including incoming) to be explicitly classified
-    const remaining = v.transactionLog.filter(t => !t.processed)
-    for (const t of remaining) {
-      const incoming = t.net >= 0
-      const ok = await dialog.confirm(
-        `${incoming ? 'Incoming' : 'Outgoing'} TX ${t.txid}\n\nHas this transaction processed on the network?`,
-        {
-          title: 'Confirm Processed Status',
-          confirmText: 'I Certify',
-          cancelText: 'Not Yet'
-        }
-      )
-      v.markProcessed(t.txid, ok)
-    }
+    const lines = pending.map(t => {
+      const direction = t.net >= 0 ? 'Incoming' : 'Outgoing'
+      return `${direction} · ${t.txid}`
+    }).join('\n')
 
-    // Ensure no unprocessed outgoing remain
-    const stillPendingOutgoing = v.transactionLog.some(t => t.net < 0 && !t.processed)
-    if (stillPendingOutgoing) {
-      await dialog.alert('You still have pending outgoing transactions without a clear processed status. Resolve them before saving.', 'Save Blocked')
-      return false
-    }
-    return true
+    const proceed = await dialog.confirm(
+      `These transactions are still marked as "Not processed":\n\n${lines}\n\nYou can update their status from the Dashboard tab once you have independent confirmation. Continue with SAVE anyway?`,
+      {
+        title: 'Pending Transactions',
+        confirmText: 'Save Anyway',
+        cancelText: 'Review First'
+      }
+    )
+    return proceed
   }
 
   async function onSaveVault () {
@@ -1449,14 +1584,38 @@ function AppInner () {
         return
       }
 
-      const certified = await vault.downloadVaultFileAndCertify()
-      if (certified) {
-        // Post-save "logout"
-        setVault(null)
-        setLastSavedPlainHash(null)
-        setActiveTab('dashboard')
-      } else {
-        notify('error', 'Save certification was cancelled. The process was not finished. You must properly perform all steps.')
+      const bytes = await vault.saveToFileBytes()
+      const hashHex = Utils.toHex(Hash.sha256(bytes))
+      const suggestedName = loadedFileMeta?.fileName || vault.lastKnownFileName || `${vault.vaultName.replace(/\s+/g, '_')}.vaultfile`
+      const fileName = suggestedName.replace(/[^a-z0-9_\-\.]+/gi, '_') || `vault_${Date.now()}.vaultfile`
+
+      const blob = new Blob([new Uint8Array(bytes)], { type: 'application/octet-stream' })
+      const url = URL.createObjectURL(blob)
+      const a = document.createElement('a')
+      a.href = url
+      a.download = fileName
+      a.click()
+      URL.revokeObjectURL(url)
+
+      vault.lastKnownFileName = fileName
+      vault.lastLoadedFileHash = hashHex
+      const plainHashNow = vault.computePlaintextHash()
+      setLastSavedPlainHash(plainHashNow)
+      recordVaultSaveMetadata({ plainHash: plainHashNow, fileHash: hashHex, fileName, bytes })
+      setLoadedFileMeta({
+        fileHash: hashHex,
+        fileName,
+        loadedAt: Date.now(),
+        expectedHash: hashHex,
+        mismatch: false
+      })
+      setAppKey(k => k + 1)
+
+      try {
+        await navigator.clipboard.writeText(hashHex)
+        notify('success', `Vault saved to ${fileName}. SHA-256 hash copied to clipboard.`)
+      } catch {
+        notify('success', `Vault saved to ${fileName}. SHA-256 hash: ${hashHex}`)
       }
     } catch (e: any) {
       notify('error', e.message || 'Failed to save vault.')
@@ -1500,26 +1659,42 @@ function AppInner () {
       <div style={appShellStyle}>
         <div style={containerStyle}>
           {notification && <NotificationBanner notification={notification} onDismiss={() => setNotification(null)} />}
-          <div style={{ ...panelStyle, padding: 16 }}>
+          <div style={{ ...panelStyle, padding: 16, display: 'grid', gap: 16 }}>
             <h1 style={{ marginTop: 0 }}>BSV Vault Manager Suite</h1>
-            <section style={{ border: `1px solid ${COLORS.border}`, padding: 12, borderRadius: 8, display: 'grid', gap: 8 }}>
-              <h2 style={{ marginTop: 0, fontSize: 18 }}>Open / New</h2>
-              <div style={{ display: 'grid', gap: 8 }}>
-                <input style={{ maxWidth: '100%' }} type="file" accept=".vaultfile,application/octet-stream" onChange={e => e.target.files && onOpenVault(e.target.files[0])} />
-                <button onClick={onNewVault} style={btnStyle}>Create New Vault</button>
+            <section style={{ border: `1px solid ${COLORS.border}`, padding: 12, borderRadius: 8, display: 'grid', gap: 12 }}>
+              <div>
+                <h2 style={{ margin: '0 0 4px 0', fontSize: 18 }}>Open an Existing Vault</h2>
+                <p style={{ margin: 0, fontSize: 13, color: COLORS.gray600 }}>Select your saved <code>.vaultfile</code>. Integrity and backups will be checked automatically.</p>
               </div>
+              <input
+                style={{ maxWidth: '100%' }}
+                type="file"
+                accept=".vaultfile,application/octet-stream"
+                onChange={e => e.target.files && onOpenVault(e.target.files[0])}
+              />
             </section>
 
-            <section style={{ ...sectionStyle, marginTop: 12 }}>
-              <h2 style={{ marginTop: 0 }}>Important Notices</h2>
-              <p><b>Offline, High-Value Security Tool.</b> This software is designed for secure, offline management of BSV funds using SPV and Atomic BEEF data.</p>
-              <p><b>No Warranties. Use At Your Own Risk.</b> This software is provided “AS IS,” without warranties of any kind, express or implied, including without limitation merchantability, fitness for a particular purpose, title, and noninfringement. You assume all risks associated with its use.</p>
-              <p><b>Operational Discipline Required.</b> Always verify transactions in multiple external tools, follow the Vault Operator’s Manual, and employ trained operators for custody operations. Do not broadcast or process transactions you have not independently verified.</p>
-              <p><b>Versioning & Integrity.</b> Always save the vault file after any change, verify the file’s SHA-256 hash, and securely delete prior revisions. Maintain redundant, offline backups. Treat hash verification as mandatory for each load.</p>
-              <p><b>No Credential Storage.</b> Never store vault passwords in the browser or password managers. This application attempts to disable such prompts, but you must remain vigilant.</p>
-              <p><b>Clipboard Hijacking Risk.</b> After copying any address or script, paste into a trusted editor and compare character-by-character before use. Malware can silently rewrite clipboard contents.</p>
-              <p style={{ color: COLORS.gray600, marginTop: 8 }}>By using this software, you acknowledge and accept these terms and assume full responsibility for all outcomes.</p>
-            </section>
+            {showCreateForm ? (
+              <NewVaultForm
+                onCancel={() => setShowCreateForm(false)}
+                onSubmit={handleCreateVault}
+                submitting={isLoading}
+              />
+            ) : (
+              <section style={{ ...sectionStyle }}>
+                <h2 style={{ marginTop: 0 }}>Create a New Vault</h2>
+                <p style={{ marginTop: 0, fontSize: 13, color: COLORS.gray600 }}>
+                  Configure the core policies, password, and block height in a single step. You can adjust advanced settings later in <b>Settings</b>.
+                </p>
+                <button onClick={() => setShowCreateForm(true)} style={btnStyle}>
+                  Launch Setup Form
+                </button>
+              </section>
+            )}
+
+            <div style={{ fontSize: 12, color: COLORS.gray600, borderTop: `1px solid ${COLORS.border}`, paddingTop: 12 }}>
+              This offline tool ships without warranty. Keep copies of your vault file on secure, redundant media. The application will surface latest hash and automatic backup guidance after each save.
+            </div>
           </div>
         </div>
       </div>
@@ -1540,6 +1715,64 @@ function AppInner () {
     <div style={appShellStyle}>
       <div style={containerStyle}>
         {notification && <NotificationBanner notification={notification} onDismiss={() => setNotification(null)} />}
+
+        {loadedFileMeta && (
+          <div style={{
+            ...panelStyle,
+            marginBottom: 12,
+            borderColor: loadedFileMeta.mismatch ? '#d9534f' : COLORS.border,
+            background: loadedFileMeta.mismatch ? '#fff6f6' : '#f9fbff',
+            display: 'grid',
+            gap: 6
+          }}>
+            <div style={{ fontWeight: 600, color: loadedFileMeta.mismatch ? '#a12121' : COLORS.gray700 }}>
+              Loaded file details
+            </div>
+            <div style={{ fontSize: 13, wordBreak: 'break-all' }}>
+              <b>File:</b> {loadedFileMeta.fileName || 'Unknown (.vaultfile)'} &nbsp;·&nbsp;
+              <b>Loaded at:</b> {new Date(loadedFileMeta.loadedAt).toLocaleString()}
+            </div>
+            <div style={{ fontSize: 13, wordBreak: 'break-all' }}>
+              <b>SHA-256:</b> <code>{loadedFileMeta.fileHash}</code>
+            </div>
+            {loadedFileMeta.expectedHash && (
+              <div style={{ fontSize: 13, wordBreak: 'break-all' }}>
+                <b>Last saved hash on this device:</b>{' '}
+                <code>{loadedFileMeta.expectedHash}</code>
+                {loadedFileMeta.mismatch
+                  ? <span style={{ color: '#a12121', fontWeight: 600 }}> — mismatch detected</span>
+                  : <span style={{ color: COLORS.green }}> — matches</span>}
+              </div>
+            )}
+            <div style={{ fontSize: 12, color: COLORS.gray600 }}>
+              {loadedFileMeta.mismatch
+                ? 'Hashes differ from the last approved version. Pause operations, investigate the discrepancy, and recover from an automatic backup in Settings.'
+                : 'Hash stored for quick comparison next time you load this file. You can export verified backups from Settings.'}
+            </div>
+            <div>
+              <button
+                onClick={() => navigator.clipboard.writeText(loadedFileMeta.fileHash)}
+                style={{ ...btnGhostStyle, width: '100%', maxWidth: 220 }}
+              >
+                Copy SHA-256 Hash
+              </button>
+            </div>
+          </div>
+        )}
+
+        {entropyRequest && (
+          <EntropyCaptureModal
+            bytesNeeded={entropyRequest.size}
+            onComplete={(bytes) => {
+              entropyRequest.resolve(bytes)
+              setEntropyRequest(null)
+            }}
+            onCancel={() => {
+              entropyRequest.reject(new Error('Entropy collection cancelled'))
+              setEntropyRequest(null)
+            }}
+          />
+        )}
 
         {incomingPreview && (
           <ProcessIncomingModal
@@ -1631,7 +1864,16 @@ function AppInner () {
           )}
 
           {activeTab === 'settings' && (
-            <SettingsPanel vault={vault} onUpdate={forceAppUpdate} setLastSavedPlainHash={setLastSavedPlainHash} />
+            <SettingsPanel
+              vault={vault}
+              onUpdate={forceAppUpdate}
+              setLastSavedPlainHash={setLastSavedPlainHash}
+              plainHash={plainHash}
+              expectedHash={expectedHashRecord}
+              backups={backupEntries}
+              onDownloadBackup={handleDownloadBackup}
+              loadedFileMeta={loadedFileMeta}
+            />
           )}
         </div>
       </div>
@@ -1644,6 +1886,317 @@ function AppInner () {
  * Panels & Components
  * =============================================================================
  */
+
+type NewVaultFormProps = {
+  onSubmit: (opts: CreateVaultOptions) => Promise<void>
+  onCancel: () => void
+  submitting: boolean
+}
+
+const advancedBoxStyle: React.CSSProperties = {
+  border: `1px dashed ${COLORS.border}`,
+  borderRadius: 8,
+  padding: 12,
+  background: '#fafafa',
+  display: 'grid',
+  gap: 8
+}
+
+const toggleRowStyle: React.CSSProperties = {
+  display: 'grid',
+  gridTemplateColumns: 'auto 1fr',
+  gap: 12,
+  alignItems: 'flex-start',
+  padding: '8px 0',
+  borderBottom: `1px solid ${COLORS.border}`
+}
+
+const toggleHelpStyle: React.CSSProperties = { fontSize: 12, color: COLORS.gray600, marginTop: 4, lineHeight: 1.4 }
+
+const NewVaultForm: FC<NewVaultFormProps> = ({ onSubmit, onCancel, submitting }) => {
+  const [name, setName] = useState('Vault')
+  const [password, setPassword] = useState('')
+  const [confirmPassword, setConfirmPassword] = useState('')
+  const [blockHeight, setBlockHeight] = useState('')
+  const [rounds, setRounds] = useState(String(80000))
+  const [persistHeaders, setPersistHeaders] = useState(String(144))
+  const [reverifyRecent, setReverifyRecent] = useState(String(60))
+  const [reverifyHeight, setReverifyHeight] = useState(String(600))
+  const [requireIncomingReview, setRequireIncomingReview] = useState(true)
+  const [requireOutgoingReview, setRequireOutgoingReview] = useState(false)
+  const [requireEntropy, setRequireEntropy] = useState(false)
+  const [showAdvanced, setShowAdvanced] = useState(false)
+  const [error, setError] = useState<string | null>(null)
+
+  const handleSubmit = async (event: React.FormEvent) => {
+    event.preventDefault()
+    if (submitting) return
+
+    const nameOk = validateVaultName(name)
+    if (nameOk !== true) { setError(typeof nameOk === 'string' ? nameOk : 'Invalid vault name.'); return }
+
+    const pwOk = validatePassword(password)
+    if (pwOk !== true) { setError(typeof pwOk === 'string' ? pwOk : 'Invalid password.'); return }
+    if (password !== confirmPassword) { setError('Passwords do not match.'); return }
+
+    const roundsOk = validatePBKDF2Rounds(rounds)
+    if (roundsOk !== true) { setError(typeof roundsOk === 'string' ? roundsOk : 'Invalid PBKDF2 rounds.'); return }
+
+    const heightOk = requireIntegerString(blockHeight, 'Block height', { min: 1 })
+    if (heightOk !== true) { setError(typeof heightOk === 'string' ? heightOk : 'Invalid block height.'); return }
+
+    const persistOk = requireIntegerString(persistHeaders, 'Persist headers (blocks)', { min: 0 })
+    if (persistOk !== true) { setError(typeof persistOk === 'string' ? persistOk : 'Invalid header retention.'); return }
+
+    const recentOk = requireIntegerString(reverifyRecent, 'Re-verify recent headers (seconds)', { min: 1 })
+    if (recentOk !== true) { setError(typeof recentOk === 'string' ? recentOk : 'Invalid re-verify window.'); return }
+
+    const heightWindowOk = requireIntegerString(reverifyHeight, 'Re-verify height (seconds)', { min: 1 })
+    if (heightWindowOk !== true) { setError(typeof heightWindowOk === 'string' ? heightWindowOk : 'Invalid height re-verify window.'); return }
+
+    setError(null)
+    await onSubmit({
+      name: name.trim(),
+      password,
+      passwordRounds: Number(rounds),
+      useUserEntropyForRandom: requireEntropy,
+      confirmIncomingCoins: requireIncomingReview,
+      confirmOutgoingCoins: requireOutgoingReview,
+      persistHeadersOlderThanBlocks: Number(persistHeaders),
+      reverifyRecentHeadersAfterSeconds: Number(reverifyRecent),
+      reverifyCurrentBlockHeightAfterSeconds: Number(reverifyHeight),
+      initialBlockHeight: Number(blockHeight)
+    })
+  }
+
+  return (
+    <section style={{ ...sectionStyle }}>
+      <form onSubmit={handleSubmit} autoComplete="off" style={{ display: 'grid', gap: 12 }}>
+        <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', gap: 12 }}>
+          <h2 style={{ margin: 0 }}>New Vault Setup</h2>
+          <button type="button" onClick={onCancel} style={btnGhostStyle}>Cancel</button>
+        </div>
+        <p style={{ margin: 0, fontSize: 13, color: COLORS.gray600 }}>
+          Fill out the essentials once. You can revisit all settings in the <b>Settings</b> tab after creation.
+        </p>
+        <label style={{ display: 'grid', gap: 4 }}>
+          <span>Vault name</span>
+          <input value={name} onChange={e => setName(e.target.value)} style={inputStyle} maxLength={64} autoFocus />
+        </label>
+        <label style={{ display: 'grid', gap: 4 }}>
+          <span>Password</span>
+          <input type="password" value={password} onChange={e => setPassword(e.target.value)} style={inputStyle} maxLength={1024} />
+        </label>
+        <label style={{ display: 'grid', gap: 4 }}>
+          <span>Confirm password</span>
+          <input type="password" value={confirmPassword} onChange={e => setConfirmPassword(e.target.value)} style={inputStyle} maxLength={1024} />
+        </label>
+        <div style={{ fontSize: 12, color: COLORS.gray600 }}>
+          Use a memorable passphrase (12+ characters). Symbols and digits are optional.
+        </div>
+        <label style={{ display: 'grid', gap: 4 }}>
+          <span>Current HONEST chain block height</span>
+          <input
+            value={blockHeight}
+            onChange={e => setBlockHeight(e.target.value)}
+            style={inputStyle}
+            inputMode="numeric"
+            pattern="[0-9]*"
+            placeholder="e.g. 820000"
+          />
+          <div style={toggleHelpStyle}>
+            The vault records when you confirmed this value so you can be reminded to refresh it later.
+          </div>
+        </label>
+
+        <div style={{ borderTop: `1px solid ${COLORS.border}`, paddingTop: 8, display: 'grid', gap: 8 }}>
+          <div style={{ fontWeight: 600 }}>Policy quick toggles</div>
+
+          <label style={toggleRowStyle}>
+            <input type="checkbox" checked={requireIncomingReview} onChange={e => setRequireIncomingReview(e.target.checked)} />
+            <div>
+              <div>Require manual review before adding incoming UTXOs</div>
+              <div style={toggleHelpStyle}>
+                When enabled, the review modal calls out each matched UTXO before it is added to the vault.
+              </div>
+            </div>
+          </label>
+
+          <label style={toggleRowStyle}>
+            <input type="checkbox" checked={requireOutgoingReview} onChange={e => setRequireOutgoingReview(e.target.checked)} />
+            <div>
+              <div>Require per-UTXO attestation when spending</div>
+              <div style={toggleHelpStyle}>
+                Adds an extra confirmation for every input you sign so operators can attest they verified it on the HONEST chain.
+              </div>
+            </div>
+          </label>
+
+          <label style={{ ...toggleRowStyle, borderBottom: 'none' }}>
+            <input type="checkbox" checked={requireEntropy} onChange={e => setRequireEntropy(e.target.checked)} />
+            <div>
+              <div>Collect extra keyboard/mouse entropy</div>
+              <div style={toggleHelpStyle}>
+                Recommended if you do not trust the device RNG. You&apos;ll mash keys once and the app records randomness automatically.
+              </div>
+            </div>
+          </label>
+        </div>
+
+        <div>
+          <button
+            type="button"
+            onClick={() => setShowAdvanced(s => !s)}
+            style={{ ...btnGhostStyle, background: showAdvanced ? COLORS.green : '#666', color: '#fff', width: '100%', maxWidth: 240 }}
+          >
+            {showAdvanced ? 'Hide Advanced Options' : 'Show Advanced Options'}
+          </button>
+        </div>
+
+        {showAdvanced && (
+          <div style={advancedBoxStyle}>
+            <label style={{ display: 'grid', gap: 4 }}>
+              <span>PBKDF2 rounds</span>
+              <input
+                value={rounds}
+                onChange={e => setRounds(e.target.value)}
+                style={inputStyle}
+                inputMode="numeric"
+                pattern="[0-9]*"
+              />
+              <div style={toggleHelpStyle}>
+                Default is 80,000. Higher values increase password derivation cost when unlocking.
+              </div>
+            </label>
+            <label style={{ display: 'grid', gap: 4 }}>
+              <span>Persist headers older than (blocks)</span>
+              <input
+                value={persistHeaders}
+                onChange={e => setPersistHeaders(e.target.value)}
+                style={inputStyle}
+                inputMode="numeric"
+                pattern="[0-9]*"
+              />
+            </label>
+            <label style={{ display: 'grid', gap: 4 }}>
+              <span>Re-verify recent headers every (seconds)</span>
+              <input
+                value={reverifyRecent}
+                onChange={e => setReverifyRecent(e.target.value)}
+                style={inputStyle}
+                inputMode="numeric"
+                pattern="[0-9]*"
+              />
+            </label>
+            <label style={{ display: 'grid', gap: 4 }}>
+              <span>Re-verify block height every (seconds)</span>
+              <input
+                value={reverifyHeight}
+                onChange={e => setReverifyHeight(e.target.value)}
+                style={inputStyle}
+                inputMode="numeric"
+                pattern="[0-9]*"
+              />
+            </label>
+          </div>
+        )}
+
+        {error && (
+          <div style={{ color: COLORS.red, fontSize: 12 }}>{error}</div>
+        )}
+
+        <button type="submit" style={btnStyle} disabled={submitting}>
+          {submitting ? 'Creating…' : 'Create Vault'}
+        </button>
+      </form>
+    </section>
+  )
+}
+
+const EntropyCaptureModal: FC<{ bytesNeeded: number, onComplete: (bytes: number[]) => void, onCancel: () => void }> = ({ bytesNeeded, onComplete, onCancel }) => {
+  const [samples, setSamples] = useState<number[]>([])
+  const [keypresses, setKeypresses] = useState(0)
+  const doneRef = React.useRef(false)
+  const target = Math.max(64, bytesNeeded)
+
+  const appendSamples = useCallback((vals: number[]) => {
+    setSamples(prev => {
+      if (prev.length >= target) return prev
+      const next = prev.concat(vals).slice(0, target)
+      return next
+    })
+  }, [target])
+
+  useEffect(() => {
+    const handleKey = (event: KeyboardEvent) => {
+      const base = event.key.length === 1 ? event.key.charCodeAt(0) : event.keyCode
+      const mix = (base + Math.floor(event.timeStamp)) & 0xff
+      appendSamples([mix, (event.location * 73) & 0xff, (Math.random() * 256) | 0])
+      setKeypresses(k => k + 1)
+    }
+    const handleMouse = (event: MouseEvent) => {
+      const delta = (Math.abs(event.movementX) + Math.abs(event.movementY)) & 0xff
+      appendSamples([
+        delta,
+        (event.screenX ^ event.screenY) & 0xff,
+        (Math.random() * 256) | 0
+      ])
+    }
+    const handleTouch = (event: TouchEvent) => {
+      const touch = event.touches[0]
+      if (!touch) return
+      appendSamples([
+        (touch.screenX + touch.screenY) & 0xff,
+        (event.timeStamp) & 0xff,
+        (Math.random() * 256) | 0
+      ])
+    }
+    const handlePaste = (event: ClipboardEvent) => {
+      const text = event.clipboardData?.getData('text') || ''
+      const utf = Utils.toArray(text, 'utf8')
+      appendSamples(utf.slice(0, 16))
+    }
+
+    window.addEventListener('keydown', handleKey)
+    window.addEventListener('mousemove', handleMouse)
+    window.addEventListener('touchmove', handleTouch)
+    window.addEventListener('paste', handlePaste)
+    return () => {
+      window.removeEventListener('keydown', handleKey)
+      window.removeEventListener('mousemove', handleMouse)
+      window.removeEventListener('touchmove', handleTouch)
+      window.removeEventListener('paste', handlePaste)
+    }
+  }, [appendSamples])
+
+  useEffect(() => {
+    if (!doneRef.current && samples.length >= target) {
+      doneRef.current = true
+      onComplete(samples.slice(0, target))
+    }
+  }, [samples, target, onComplete])
+
+  const progress = Math.min(1, samples.length / target)
+
+  return (
+    <Modal title="Collect Entropy" onClose={onCancel}>
+      <div style={{ display: 'grid', gap: 12 }}>
+        <p style={{ margin: 0 }}>
+          Wiggle the mouse or trackpad, mash random keys, and paste anything unpredictable. We’ll capture enough noise automatically.
+        </p>
+        <div style={{ height: 14, borderRadius: 999, background: '#eee', overflow: 'hidden' }}>
+          <div style={{ width: `${progress * 100}%`, background: COLORS.green, height: '100%', transition: 'width 120ms linear' }} />
+        </div>
+        <div style={{ fontSize: 13, color: COLORS.gray600 }}>
+          Progress: {(progress * 100).toFixed(0)}% · Key presses recorded: {keypresses}
+        </div>
+        <button type="button" onClick={onCancel} style={{ ...btnGhostStyle, maxWidth: 200 }}>
+          Cancel (use device RNG)
+        </button>
+      </div>
+    </Modal>
+  )
+}
 
 const DashboardPanel: FC<{ vault: Vault, balance: number, triggerRerender: () => void }> = ({ vault, balance, triggerRerender }) => {
   return (
@@ -1693,29 +2246,64 @@ const DashboardPanel: FC<{ vault: Vault, balance: number, triggerRerender: () =>
 const KeyManager: FC<{ vault: Vault, onUpdate: () => void, notify: (type: Notification['type'], msg: string) => void }> = ({ vault, onUpdate, notify }) => {
   const dialog = useDialog()
   const [hoverMap, setHoverMap] = useState<Record<string, boolean>>({})
+  const [editingSerial, setEditingSerial] = useState<string | null>(null)
+  const [memoDraft, setMemoDraft] = useState('')
+  const [savingMemo, setSavingMemo] = useState(false)
+
+  const beginEdit = (serial: string, currentMemo: string) => {
+    setEditingSerial(serial)
+    setMemoDraft(currentMemo || '')
+  }
+
+  const cancelEdit = () => {
+    setEditingSerial(null)
+    setMemoDraft('')
+    setSavingMemo(false)
+  }
+
+  const saveMemo = async () => {
+    if (!editingSerial) return
+    setSavingMemo(true)
+    try {
+      await vault.updateKeyMemo(editingSerial, memoDraft)
+      notify('success', `Memo updated for ${editingSerial}.`)
+      onUpdate()
+      cancelEdit()
+    } catch (e: any) {
+      notify('error', e?.message || 'Failed to update memo.')
+      setSavingMemo(false)
+    }
+  }
+
   return (
     <section style={{ ...sectionStyle }}>
       <h2 style={{ marginTop: 0 }}>Keys ({vault.keys.length})</h2>
-      <div style={{ display: 'grid', gap: 8 }}>
-              <button
-          onClick={async () => {
-            const memo = (await dialog.prompt('Memo for this key (optional):', { title: 'Key Memo', maxLength: 256, validate: (v) => validateMemo(v, 'Memo', 256) })) || ''
-            await vault.generateKey(memo); onUpdate()
-          }}
-          style={btnStyle}
-        >
-          Generate New Key
-        </button>
-      </div>
+      <p style={{ fontSize: 12, color: COLORS.gray600, margin: '0 0 8px 0' }}>
+        Generate as many fresh keys as you need. Deposit slips bundle the address, script, and metadata you can hand to counterparties.
+      </p>
+      <button
+        onClick={async () => {
+          await vault.generateKey('')
+          onUpdate()
+          notify('success', 'New key generated.')
+        }}
+        style={btnStyle}
+      >
+        Generate New Key
+      </button>
       <div style={{ marginTop: 12 }}>
         {[...vault.keys].reverse().map(k => (
           <div key={k.serial} style={{ borderTop: `1px solid ${COLORS.border}`, padding: '8px 0', display: 'grid', gridTemplateColumns: '1fr', gap: 8 }}>
             <div>
-              <b>{k.serial}</b> {k.memo && `— ${k.memo}`} {k.usedOnChain ? <span style={{ color: '#b36' }}> (used)</span> : <span style={{color: COLORS.green}}>(unused)</span>}
+              <b>{k.serial}</b> {k.memo && editingSerial !== k.serial && `— ${k.memo}`} {k.usedOnChain ? <span style={{ color: '#b36' }}> (used)</span> : <span style={{color: COLORS.green}}>(unused)</span>}
               <div style={{ fontSize: 12, color: COLORS.gray600, fontFamily: 'monospace', wordBreak: 'break-all' }}>{k.public.toAddress()}</div>
             </div>
             <div style={{ display: 'grid', gap: 8, gridTemplateColumns: '1fr 1fr' }}>
-              <button onClick={async () => { await vault.downloadDepositSlipTxt(k.serial); notify('info', `Deposit slip generated for ${k.serial}`) }} style={btnGhostStyle}>
+              <button
+                onClick={async () => { await vault.downloadDepositSlipTxt(k.serial); notify('info', `Deposit slip generated for ${k.serial}`) }}
+                style={btnGhostStyle}
+                title="Creates a text file with the address, script, and metadata you can hand to counterparties as a receipt."
+              >
                 Deposit Slip (.txt)
               </button>
               <button
@@ -1732,7 +2320,33 @@ const KeyManager: FC<{ vault: Vault, onUpdate: () => void, notify: (type: Notifi
               >
                 Copy Address
               </button>
+              {editingSerial === k.serial ? (
+                <button style={{ ...btnGhostStyle, gridColumn: 'span 2', background: '#999' }} disabled>
+                  Editing…
+                </button>
+              ) : (
+                <button onClick={() => beginEdit(k.serial, k.memo)} style={{ ...btnGhostStyle, gridColumn: 'span 2' }}>
+                  Edit Memo
+                </button>
+              )}
             </div>
+            {editingSerial === k.serial && (
+              <div style={{ display: 'grid', gap: 8 }}>
+                <input
+                  value={memoDraft}
+                  onChange={e => setMemoDraft(e.target.value)}
+                  style={inputStyle}
+                  placeholder="Optional memo (visible in this vault only)"
+                  maxLength={256}
+                />
+                <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap' }}>
+                  <button onClick={saveMemo} style={btnStyle} disabled={savingMemo}>
+                    {savingMemo ? 'Saving…' : 'Save Memo'}
+                  </button>
+                  <button onClick={cancelEdit} style={btnGhostStyle}>Cancel</button>
+                </div>
+              </div>
+            )}
           </div>
         ))}
       </div>
@@ -1779,29 +2393,15 @@ const ProcessIncomingModal: FC<{
   onError: (msg: string) => void
 }> = ({ vault, preview, onClose, onSuccess, onError }) => {
   const dialog = useDialog()
-  const needsConfirmation = vault.confirmIncomingCoins
-  const allVouts = preview.matches.map(m => m.outputIndex)
-  const [admit, setAdmit] = useState<Record<number, boolean>>(() =>
-    needsConfirmation ? {} : Object.fromEntries(allVouts.map(v => [v, true]))
-  )
   const [memos, setMemos] = useState<Record<number, string>>({})
   const [txMemo, setTxMemo] = useState('')
   const [isFinalizing, setIsFinalizing] = useState(false)
-
-  const handleToggleAdmit = (vout: number) => {
-    setAdmit(prev => ({...prev, [vout]: !prev[vout]}))
-  }
+  const [processed, setProcessed] = useState(false)
 
   const handleFinalize = async () => {
     setIsFinalizing(true)
     try {
-      // Require user to explicitly choose processed status for the incoming transaction
-      const processed = await dialog.confirm('Has this incoming transaction processed on the network?', {
-        title: 'Processed Status',
-        confirmText: 'I Certify',
-        cancelText: 'Not Yet'
-      })
-      const res = await vault.processIncoming(preview.tx, { txMemo, admit, perUtxoMemo: memos, processed })
+      const res = await vault.processIncoming(preview.tx, { txMemo, perUtxoMemo: memos, processed })
       onSuccess(res.txid)
     } catch (e: any) {
       onError(e.message || 'An error occurred during finalization.')
@@ -1819,11 +2419,13 @@ const ProcessIncomingModal: FC<{
       </div>
       <p style={{fontSize: 13, color: 'green', fontWeight: 'bold'}}>SPV Verified Successfully</p>
       <hr style={{margin: '12px 0'}} />
-      <p>The following outputs in this transaction are spendable by your vault's keys. {needsConfirmation ? 'Select which UTXOs to admit:' : 'All matched UTXOs will be admitted automatically.'}</p>
+      <p>The following outputs in this transaction are spendable by your vault's keys. All matched UTXOs will be admitted automatically; add memos if helpful.</p>
+      <div style={{ fontSize: 12, color: COLORS.gray600, marginTop: -4 }}>
+        Tip: open your trusted SPV explorer with this TXID and confirm the merkle root matches your independently retrieved headers before admitting funds.
+      </div>
 
       {preview.matches.map(m => (
         <div key={m.outputIndex} style={{border: `1px solid ${COLORS.border}`, padding: 8, margin: '8px 0', borderRadius: 8}}>
-          {needsConfirmation && <input type="checkbox" checked={!!admit[m.outputIndex]} onChange={() => handleToggleAdmit(m.outputIndex)} style={{marginRight: 8}} />}
           <strong>Output #{m.outputIndex}</strong>: {m.satoshis.toLocaleString()} sats (<b>{(m.satoshis / 100000000).toFixed(8)}</b> BSV), to Key <strong>{m.serial}</strong>
           <input
             type="text"
@@ -1854,11 +2456,15 @@ const ProcessIncomingModal: FC<{
         onChange={e => setTxMemo(e.target.value)}
         maxLength={256}
       />
+      <label style={{ display: 'flex', gap: 8, alignItems: 'center', marginTop: 12 }}>
+        <input type="checkbox" checked={processed} onChange={e => setProcessed(e.target.checked)} />
+        <span style={{ fontSize: 13 }}>Mark as processed on-chain (check after your independent confirmation).</span>
+      </label>
 
       <div style={{marginTop: 12, display: 'flex', justifyContent: 'flex-end', gap: 8, flexWrap:'wrap'}}>
         <button onClick={onClose} style={btnGhostStyle}>Cancel</button>
-        <button onClick={handleFinalize} disabled={isFinalizing || Object.values(admit).every(v => !v)} style={btnStyle}>
-          {isFinalizing ? 'Saving...' : `Admit ${Object.values(admit).filter(Boolean).length} UTXO(s)`}
+        <button onClick={handleFinalize} disabled={isFinalizing} style={btnStyle}>
+          {isFinalizing ? 'Saving...' : `Admit ${preview.matches.length} UTXO(s)`}
         </button>
       </div>
     </Modal>
@@ -1887,6 +2493,7 @@ const OutgoingWizard: FC<{ vault: Vault, onUpdate: () => void, notify: (t: Notif
 
   const [beefHex, setBeefHex] = useState<string | null>(null)
   const [beefTxid, setBeefTxid] = useState<string | null>(null)
+  const [rawTxHex, setRawTxHex] = useState<string | null>(null)
   const [isBuilding, setIsBuilding] = useState(false)
 
   // Handlers for the multi-output UI
@@ -1916,6 +2523,7 @@ const OutgoingWizard: FC<{ vault: Vault, onUpdate: () => void, notify: (t: Notif
     setRequirePerUtxoAttestation(false)
     setBeefHex(null)
     setBeefTxid(null)
+    setRawTxHex(null)
   }
 
   const totalOutputSats = useMemo(() => {
@@ -1937,6 +2545,60 @@ const OutgoingWizard: FC<{ vault: Vault, onUpdate: () => void, notify: (t: Notif
     }
     return sum
   }, [manualInputs, vault.coins, vault.beefStore])
+
+  const coinTimestamp = useCallback((coin: CoinRecord) => {
+    const entry = vault.transactionLog.find(t => t.txid === coin.txid)
+    return entry ? entry.at : 0
+  }, [vault.transactionLog])
+
+  useEffect(() => {
+    if (step !== 2) return
+    if (Object.keys(manualInputs).some(id => manualInputs[id])) return
+    const required = totalOutputSats
+    if (required <= 0) return
+    const selection: Record<string, boolean> = {}
+    let accumulated = 0
+    const coinsSorted = [...vault.coins].sort((a, b) => coinTimestamp(a) - coinTimestamp(b))
+    for (const coin of coinsSorted) {
+      try {
+        const tx = getTxFromStore(vault.beefStore, coin.txid)
+        const sat = tx.outputs[coin.outputIndex].satoshis as number
+        const id = `${coin.txid}:${coin.outputIndex}`
+        selection[id] = true
+        accumulated += sat
+        if (accumulated >= required) break
+      } catch {}
+    }
+    if (Object.keys(selection).length) {
+      setManualInputs(selection)
+    }
+  }, [step, manualInputs, vault.coins, vault.beefStore, totalOutputSats, coinTimestamp])
+
+  useEffect(() => {
+    if (step !== 3) return
+    if (Object.values(changeSerials).some(Boolean)) return
+    let cancelled = false
+    const ensureChangeKey = async () => {
+      let fresh = [...vault.keys].find(k => !k.usedOnChain)
+      if (!fresh) {
+        try {
+          const newKey = await vault.generateKey('change')
+          onUpdate()
+          fresh = newKey
+          if (!cancelled && fresh) {
+            notify('info', `New change key ${fresh.serial} generated automatically.`)
+          }
+        } catch (err: any) {
+          if (!cancelled) notify('error', err?.message || 'Failed to generate change key automatically.')
+          return
+        }
+      }
+      if (cancelled || !fresh) return
+      setChangeSerials({ [fresh.serial]: true })
+    }
+    ensureChangeKey()
+    return () => { cancelled = true }
+  }, [step, changeSerials, vault.keys, vault, onUpdate, notify])
 
   function nextFromOutputs() {
     try {
@@ -2071,13 +2733,17 @@ const OutgoingWizard: FC<{ vault: Vault, onUpdate: () => void, notify: (t: Notif
 
       setBeefHex(atomicBEEFHex)
       setBeefTxid(tx.id('hex') as string)
+      try {
+        const rawHex = typeof (tx as any).toHex === 'function'
+          ? (tx as any).toHex()
+          : Utils.toHex((tx.toBinary ? tx.toBinary() : []) as number[])
+        setRawTxHex(rawHex || null)
+      } catch {
+        setRawTxHex(null)
+      }
 
       onUpdate()
-      notify('success', 'Transaction built & signed. The Atomic BEEF will be exported during the SAVE process. SAVE the vault to persist changes.')
-      await dialog.alert(
-        'Next step: SAVE the vault. The SAVE process will require you to download the new Atomic BEEF, send it to the transaction recipient for processing, and confirm processed status.',
-        'Post-Sign Instructions'
-      )
+      notify('success', 'Transaction built & signed. Download the Atomic BEEF or raw hex below, then SAVE the vault to persist changes.')
       setStep(5)
     } catch (e: any) {
       notify('error', e.message || String(e))
@@ -2103,6 +2769,52 @@ const OutgoingWizard: FC<{ vault: Vault, onUpdate: () => void, notify: (t: Notif
       ))}
     </div>
   )
+
+  const downloadTextFile = useCallback((content: string, fileName: string) => {
+    try {
+      const blob = new Blob([content], { type: 'text/plain' })
+      const url = URL.createObjectURL(blob)
+      const a = document.createElement('a')
+      a.href = url
+      a.download = fileName
+      a.click()
+      URL.revokeObjectURL(url)
+    } catch (err: any) {
+      notify('error', err?.message || 'Download failed.')
+    }
+  }, [notify])
+
+  const handleDownloadBeef = useCallback(() => {
+    if (!beefHex || !beefTxid) return
+    downloadTextFile(beefHex, `tx_${beefTxid}.atomic-beef.txt`)
+    notify('info', 'Atomic BEEF downloaded.')
+  }, [beefHex, beefTxid, downloadTextFile, notify])
+
+  const handleCopyBeef = useCallback(async () => {
+    if (!beefHex) return
+    try {
+      await navigator.clipboard.writeText(beefHex)
+      notify('success', 'Atomic BEEF copied to clipboard.')
+    } catch (err: any) {
+      notify('error', err?.message || 'Clipboard copy failed.')
+    }
+  }, [beefHex, notify])
+
+  const handleCopyRaw = useCallback(async () => {
+    if (!rawTxHex) return
+    try {
+      await navigator.clipboard.writeText(rawTxHex)
+      notify('success', 'Raw transaction hex copied.')
+    } catch (err: any) {
+      notify('error', err?.message || 'Clipboard copy failed.')
+    }
+  }, [rawTxHex, notify])
+
+  const handleDownloadRaw = useCallback(() => {
+    if (!rawTxHex || !beefTxid) return
+    downloadTextFile(rawTxHex, `tx_${beefTxid}.raw-tx.txt`)
+    notify('info', 'Raw transaction hex downloaded.')
+  }, [rawTxHex, beefTxid, downloadTextFile, notify])
 
   // Helpers: Select/Deselect all inputs; "all funds available" flow
   const selectAllInputs = () => {
@@ -2221,7 +2933,15 @@ const OutgoingWizard: FC<{ vault: Vault, onUpdate: () => void, notify: (t: Notif
           </label></div>)}
           <div style={{ marginTop: 12, display: 'grid', alignItems: 'center', gap: 8 }}>
             {vault.confirmOutgoingCoins && (
-              <label><input type="checkbox" checked={requirePerUtxoAttestation} onChange={e => setRequirePerUtxoAttestation(e.target.checked)} /> {' '}Per-UTXO Attestation</label>
+              <label style={{ display: 'grid', gap: 4 }}>
+                <span style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+                  <input type="checkbox" checked={requirePerUtxoAttestation} onChange={e => setRequirePerUtxoAttestation(e.target.checked)} />
+                  <span>Require per-UTXO attestation while signing</span>
+                </span>
+                <span style={{ fontSize: 12, color: COLORS.gray600, marginLeft: 26 }}>
+                  When enabled, each input prompts the operator to confirm it against their independent HONEST chain view before the signature is applied.
+                </span>
+              </label>
             )}
             <input placeholder="Transaction Memo (optional)" value={txMemo} onChange={e => setTxMemo(e.target.value)} style={{ ...inputStyle }} autoComplete="off" />
           </div>
@@ -2267,12 +2987,40 @@ const OutgoingWizard: FC<{ vault: Vault, onUpdate: () => void, notify: (t: Notif
       {step === 5 && (
         <div>
           <b>Result</b>
-          {/* IMPORTANT: Do not reveal Atomic BEEF here; only inform user to save */}
           {beefHex && beefTxid ? (
-            <div style={{ border: `1px solid ${COLORS.border}`, borderRadius: 12, padding: 12, marginTop: 8 }}>
+            <div style={{ border: `1px solid ${COLORS.border}`, borderRadius: 12, padding: 12, marginTop: 8, display: 'grid', gap: 12 }}>
               <p style={{fontSize: 12, margin: 0, wordBreak:'break-all'}}>TXID: <code>{beefTxid}</code></p>
-              <div style={{ marginTop: 8, fontSize: 12, color: COLORS.gray600 }}>
-                The Atomic BEEF has been prepared in memory. <b>It will be made available for download during the SAVE process.</b>
+
+              <div style={{ display: 'grid', gap: 6 }}>
+                <div style={{ fontWeight: 600 }}>Atomic BEEF (share with counterparty/offline signer)</div>
+                <div style={{ border: `1px solid ${COLORS.border}`, borderRadius: 8, padding: 8, fontFamily: 'monospace', fontSize: 12, maxHeight: 160, overflowY: 'auto', wordBreak: 'break-all', background: '#fafafa' }}>
+                  {beefHex}
+                </div>
+                <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap' }}>
+                  <button onClick={() => handleCopyBeef()} style={{ ...btnGhostStyle, maxWidth: 180 }}>Copy Atomic BEEF</button>
+                  <button onClick={handleDownloadBeef} style={{ ...btnGhostStyle, maxWidth: 220 }}>Download Atomic BEEF (.txt)</button>
+                </div>
+              </div>
+
+              <div style={{ display: 'grid', gap: 6 }}>
+                <div style={{ fontWeight: 600 }}>Raw Transaction Hex (for broadcasters)</div>
+                {rawTxHex ? (
+                  <>
+                    <div style={{ border: `1px solid ${COLORS.border}`, borderRadius: 8, padding: 8, fontFamily: 'monospace', fontSize: 12, maxHeight: 160, overflowY: 'auto', wordBreak: 'break-all', background: '#fafafa' }}>
+                      {rawTxHex}
+                    </div>
+                    <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap' }}>
+                      <button onClick={() => handleCopyRaw()} style={{ ...btnGhostStyle, maxWidth: 160 }}>Copy Raw Hex</button>
+                      <button onClick={handleDownloadRaw} style={{ ...btnGhostStyle, maxWidth: 200 }}>Download Raw Hex (.txt)</button>
+                    </div>
+                  </>
+                ) : (
+                  <div style={{ fontSize: 12, color: COLORS.gray600 }}>Raw hex export unavailable. Use the Atomic BEEF file for broadcasting.</div>
+                )}
+              </div>
+
+              <div style={{ fontSize: 12, color: COLORS.gray600 }}>
+                After distributing the Atomic BEEF to the broadcast operator, SAVE the vault to persist the new state. Use your preferred broadcaster (WhatsOnChain, Merchant API, etc.) with the raw hex above. Keep the BEEF copy for recovery.
               </div>
             </div>
           ) : (
@@ -2345,7 +3093,27 @@ const LogsPanel: FC<{ vault: Vault, onUpdate: () => void }> = ({ vault, onUpdate
     )
   }
 
-const SettingsPanel: FC<{ vault: Vault, onUpdate: () => void, setLastSavedPlainHash: (h: string | null) => void }> = ({ vault, onUpdate, setLastSavedPlainHash }) => {
+type SettingsPanelProps = {
+  vault: Vault
+  onUpdate: () => void
+  setLastSavedPlainHash: (h: string | null) => void
+  plainHash: string | null
+  expectedHash?: HashRecord
+  backups: BackupRecord[]
+  onDownloadBackup: (entry: BackupRecord) => void
+  loadedFileMeta: LoadedFileMeta | null
+}
+
+const SettingsPanel: FC<SettingsPanelProps> = ({
+  vault,
+  onUpdate,
+  setLastSavedPlainHash,
+  plainHash,
+  expectedHash,
+  backups,
+  onDownloadBackup,
+  loadedFileMeta
+}) => {
   const [incoming, setIncoming] = useState(vault.confirmIncomingCoins)
   const [outgoing, setOutgoing] = useState(vault.confirmOutgoingCoins)
   const [phOld, setPhOld] = useState(String(vault.persistHeadersOlderThanBlocks))
@@ -2400,41 +3168,107 @@ const SettingsPanel: FC<{ vault: Vault, onUpdate: () => void, setLastSavedPlainH
   return (
     <section style={{ ...sectionStyle }}>
       <h2 style={{ marginTop: 0 }}>Settings</h2>
-      <div style={{ display: 'grid', gridTemplateColumns: '1fr', gap: 12 }}>
-        <div>
-          <div style={{ fontSize: 12, color: COLORS.gray600, marginBottom: 4 }}>Vault Display Name</div>
-          <input value={newName} onChange={e => setNewName(e.target.value)} style={inputStyle} autoComplete="off" maxLength={64} />
+      <div style={{ display: 'grid', gridTemplateColumns: '1fr', gap: 16 }}>
+        <div style={{ display: 'grid', gridTemplateColumns: '1fr', gap: 12 }}>
+          <div>
+            <div style={{ fontSize: 12, color: COLORS.gray600, marginBottom: 4 }}>Vault Display Name</div>
+            <input value={newName} onChange={e => setNewName(e.target.value)} style={inputStyle} autoComplete="off" maxLength={64} />
+          </div>
+
+          <label style={{ display: 'flex', gap: 8, alignItems: 'center' }}>
+            <input type="checkbox" checked={incoming} onChange={e => setIncoming(e.target.checked)} />
+            Require attestation for incoming UTXOs
+          </label>
+          <div style={{ fontSize: 12, color: COLORS.gray600, marginLeft: 26 }}>
+            When enabled, new incoming UTXOs pause for explicit operator confirmation before being admitted.
+          </div>
+          <label style={{ display: 'flex', gap: 8, alignItems: 'center' }}>
+            <input type="checkbox" checked={outgoing} onChange={e => setOutgoing(e.target.checked)} />
+            Require attestation for outgoing UTXOs
+          </label>
+          <div style={{ fontSize: 12, color: COLORS.gray600, marginLeft: 26 }}>
+            Adds a per-input confirmation during signing so the operator attests each UTXO was verified independently.
+          </div>
+          <label style={{ display: 'flex', gap: 8, alignItems: 'center' }}>
+            <input type="checkbox" checked={useUserEntropy} onChange={e => setUseUserEntropy(e.target.checked)} />
+            Require user-provided entropy for randomness (keys & salts)
+          </label>
+          <div style={{ fontSize: 12, color: COLORS.gray600, marginLeft: 26 }}>
+            Collect additional keyboard/mouse noise when randomness is needed. Useful on devices with questionable RNG.
+          </div>
+
+          <div>
+            <div style={{ fontSize: 12, color: COLORS.gray600 }}>Persist headers older than N blocks</div>
+            <input type="text" inputMode="numeric" pattern="[0-9]*" value={phOld} onChange={e => setPhOld(e.target.value)} style={inputStyle} autoComplete="off" maxLength={10} />
+          </div>
+          <div>
+            <div style={{ fontSize: 12, color: COLORS.gray600 }}>Re-verify recent headers after (seconds)</div>
+            <input type="text" inputMode="numeric" pattern="[0-9]*" value={rvRecent} onChange={e => setRvRecent(e.target.value)} style={inputStyle} autoComplete="off" maxLength={10} />
+          </div>
+          <div>
+            <div style={{ fontSize: 12, color: COLORS.gray600 }}>Re-verify current block height after (seconds)</div>
+            <input type="text" inputMode="numeric" pattern="[0-9]*" value={rvHeight} onChange={e => setRvHeight(e.target.value)} style={inputStyle} autoComplete="off" maxLength={10} />
+          </div>
+
+          <div style={{ display: 'grid', gap: 8, gridTemplateColumns: '1fr 1fr', alignItems: 'center' }}>
+            <button onClick={save} style={btnStyle}>Apply Changes</button>
+            <button onClick={doChangePassword} style={btnGhostStyle}>Change Password</button>
+          </div>
         </div>
 
-        <label style={{ display: 'flex', gap: 8, alignItems: 'center' }}>
-          <input type="checkbox" checked={incoming} onChange={e => setIncoming(e.target.checked)} />
-          Require attestation for incoming UTXOs
-        </label>
-        <label style={{ display: 'flex', gap: 8, alignItems: 'center' }}>
-          <input type="checkbox" checked={outgoing} onChange={e => setOutgoing(e.target.checked)} />
-          Require attestation for outgoing UTXOs
-        </label>
-        <label style={{ display: 'flex', gap: 8, alignItems: 'center' }}>
-          <input type="checkbox" checked={useUserEntropy} onChange={e => setUseUserEntropy(e.target.checked)} />
-          Require user-provided entropy for randomness (keys & salts)
-        </label>
+        {plainHash && (
+          <div style={{ borderTop: `1px solid ${COLORS.border}`, paddingTop: 12, display: 'grid', gap: 8 }}>
+            <div style={{ fontWeight: 600 }}>File Integrity Snapshot</div>
+            {expectedHash ? (
+              <div style={{ fontSize: 13, wordBreak: 'break-all' }}>
+                <b>Last approved hash:</b> <code>{expectedHash.fileHash}</code> (saved {new Date(expectedHash.savedAt).toLocaleString()})
+              </div>
+            ) : (
+              <div style={{ fontSize: 13, color: COLORS.gray600 }}>
+                Save this vault to establish a baseline hash for future comparisons.
+              </div>
+            )}
+            {loadedFileMeta?.fileHash && (
+              <div style={{ fontSize: 13, wordBreak: 'break-all' }}>
+                <b>Current loaded hash:</b> <code>{loadedFileMeta.fileHash}</code>
+                {expectedHash && loadedFileMeta.mismatch
+                  ? <span style={{ color: '#a12121', fontWeight: 600 }}> — differs from last approved</span>
+                  : null}
+              </div>
+            )}
+            <div style={{ fontSize: 12, color: COLORS.gray600 }}>
+              Keep these hashes with your audit logs. If the loaded hash ever differs from the approved value, recover using an automatic backup or abort operations.
+            </div>
+          </div>
+        )}
 
-        <div>
-          <div style={{ fontSize: 12, color: COLORS.gray600 }}>Persist headers older than N blocks</div>
-          <input type="text" inputMode="numeric" pattern="[0-9]*" value={phOld} onChange={e => setPhOld(e.target.value)} style={inputStyle} autoComplete="off" maxLength={10} />
-        </div>
-        <div>
-          <div style={{ fontSize: 12, color: COLORS.gray600 }}>Re-verify recent headers after (seconds)</div>
-          <input type="text" inputMode="numeric" pattern="[0-9]*" value={rvRecent} onChange={e => setRvRecent(e.target.value)} style={inputStyle} autoComplete="off" maxLength={10} />
-        </div>
-        <div>
-          <div style={{ fontSize: 12, color: COLORS.gray600 }}>Re-verify current block height after (seconds)</div>
-          <input type="text" inputMode="numeric" pattern="[0-9]*" value={rvHeight} onChange={e => setRvHeight(e.target.value)} style={inputStyle} autoComplete="off" maxLength={10} />
-        </div>
-
-        <div style={{ display: 'grid', gap: 8, gridTemplateColumns: '1fr 1fr', alignItems: 'center' }}>
-          <button onClick={save} style={btnStyle}>Apply Changes</button>
-          <button onClick={doChangePassword} style={btnGhostStyle}>Change Password</button>
+        <div style={{ borderTop: `1px solid ${COLORS.border}`, paddingTop: 12, display: 'grid', gap: 8 }}>
+          <div style={{ fontWeight: 600 }}>Automatic Backups</div>
+          {plainHash ? (
+            backups.length ? (
+              backups.map(b => (
+                <div key={b.id} style={{ border: `1px solid ${COLORS.border}`, borderRadius: 8, padding: 8, display: 'grid', gap: 4 }}>
+                  <div style={{ fontSize: 13 }}>
+                    <b>Stored:</b> {new Date(b.storedAt).toLocaleString()} &nbsp;·&nbsp; <b>SHA-256:</b> <code style={{ wordBreak: 'break-all' }}>{b.fileHash}</code>
+                  </div>
+                  <div style={{ fontSize: 12, color: COLORS.gray600 }}>
+                    {b.fileName ? `Source file: ${b.fileName}` : 'Source file name unavailable'}
+                  </div>
+                  <div>
+                    <button onClick={() => onDownloadBackup(b)} style={{ ...btnGhostStyle, maxWidth: 200 }}>
+                      Download Backup Copy
+                    </button>
+                  </div>
+                </div>
+              ))
+            ) : (
+              <div style={{ fontSize: 13, color: COLORS.gray600 }}>
+                Backups are created automatically the first time you load a vault file. None recorded yet.
+              </div>
+            )
+          ) : (
+            <div style={{ fontSize: 13, color: COLORS.gray600 }}>Load or save a vault to populate automatic backups.</div>
+          )}
         </div>
       </div>
     </section>
