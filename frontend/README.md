@@ -1,41 +1,14 @@
-# ToDo List — Get Rewarded!
+# BSV Vault Manager Frontend
 
-Create and complete TODO items, with a reward.
+This Vite + React application is the operator console that runs inside the air-gapped vault environment. It embeds the BSV TypeScript SDK to verify Atomic BEEF payloads, manage the encrypted vault state, and guide operators through dual-control ceremonies.
 
-A Stageline ("testnet") deployment of the master branch of this repository is at [staging-todo.babbage.systems](https://staging-todo.babbage.systems)
+Refer to the repository-level [`README.md`](../README.md) for project context and the authoritative operational policies in [`MANUAL.md`](../MANUAL.md).
 
-## Overview
+## Development Commands
 
-This TODO list application goes beyond the classic demo traditionally used to teach people the basics of UI libraries. It showcases MetaNet technologies like tokenization, identity, encryption and state management. To learn more, [check out the accompanying tutorial series](https://projectbabbage.com/docs/babbage-sdk/building-example-app).
+- `npm run start` — Launch the Vite dev server (default `http://localhost:5173`). Use only on a connected development workstation.
+- `npm run build` — Produce the production bundle placed in `frontend/build/`. Add `-- --base ./` when preparing artifacts for removable media.
+- `npm run build:dev` — Generate a non-minified build useful for debugging in production mode.
+- `npm run preview` — Serve the last production build locally for smoke testing.
 
-You also need to understand the [TODO Protocol](PROTOCOL.md), which defines the data format for ToDo tokens.
-
-To learn more about building Bitcoin-powered applications for the MetaNet with these tools, head over to the [Babbage Platform Documentation](https://projectbabbage.com/docs).
-
-## Development Instructions
-
-Clone the repo, then run `npm i` to install packages.
-
-To start the live development server on `localhost:8088`, run `npm run start`.
-
-Start [Babbage Stageline](https://projectbabbage.com/docs/dev-downloads) to interact with this application.
-
-Your changes should be reflected on-screen whenever you save in your editor, or reload.
-
-## ToDo Protocol Document
-
-You can find the ToDo Protocol in [PROTOCOL.md](PROTOCOL.md)
-
-## Tools Used
-
-This ToDo application uses various Bitcoin and web-related tools for different things:
-
-- [**React**](https://reactjs.org) We use React to render the webpage UI for this application, and track the state of the page.
-- [**MUI**](https://mui.com) We use a UI framework within React called MUI to help with page styling, text fields, buttons and dialog boxes.
-- [**Bitcoin SV**](https://bitcoinsv.com) We use the Bitcoin SV blockchain to timestamp and register our ToDo task tokens, and we rely on *satoshis* (a measurement of Bitcoin), so that the ToDo tokens are valuable.
-- [**Babbage SDK**](https://github.com/p2ppsr/babbage-sdk) We use the Babbage SDK so that users are able to have a Bitcoin-native identity, and can create and redeem Bitcoin tokens. The SDK also allows us to easily encrypt task data for added user privacy.
-- [**PushDrop**](https://github.com/p2ppsr/pushdrop) We use PushDrop to create Bitcoin tokens that follow the ToDo protocol, and later redeem those tokens. PushDrop makes it easier to add data payloads to tokens, while still being able to give them value and spend them.
-
-## License
-
-The license for the code in this repository is the Open BSV License.
+All production bundles must follow the clean-media, hashing, and transfer process documented in [Section 8 of the manual](../MANUAL.md#8-build-and-release-flow).

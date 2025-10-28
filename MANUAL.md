@@ -1,268 +1,278 @@
-# BSV Vault Operator’s Manual
+# BSV Vault Operator's Manual
 
-DRAFT — NOT APPROVED FOR USE
-
-**Version 1 — October 16, 2025**
-**Author:** Peer-to-Peer Privacy Systems Research, LLC
+Release Candidate — October 16, 2025  
+Maintainer: Peer-to-Peer Privacy Systems Research, LLC
 
 ---
 
-## 0) What this manual is (and isn’t)
+## How to Use This Manual
 
-This is the canonical, end-to-end playbook for running a high-assurance BSV cold-vault using SPV proofs and Atomic BEEF. It starts with the conceptual bedrock (SPV, BEEF/BUMP/Atomic BEEF, and how the TypeScript SDK enforces those rules), then codifies the physical and operational security that keeps your funds safe: how to choose and harden a room, buy and prepare air-gapped machines, move files via clean media, verify block headers from more than one source, run two-person procedures, film and audit sessions, and keep ironclad logs. After the foundation, you’ll get exact procedures for every vault task you’ll actually do: creating a vault, generating keys, receiving with Atomic BEEF, building and signing outbound, exporting and certifying files, rotating passwords, and exporting logs. The goal is boring, reproducible excellence.
+- Audience: operations leads, custodians, and auditors responsible for BSV cold-vault sessions.
+- Read Part I once to absorb the threat model and protocol fundamentals; keep Parts II–IV at hand during ceremonies.
+- Appendix A surfaces the checklists you need in the room; Appendix B contains the scripts we read aloud on camera.
+- The React application that enforces these procedures is documented in `README.md`; this manual describes the physical, human, and evidentiary controls that surround it.
+- When you change policy or software, update the relevant sections and re-issue the manual with a new version tag.
 
-Nothing here is hand-wavy. Where standards exist, we cite them and align the procedures. For BSV internals and the SDK, we reference the BRC specifications and the official SDK docs and examples. ([bsv.brc.dev][1])
+## Table of Contents
 
----
-
-## 1) Background you must internalize
-
-### 1.1 SPV, Merkle paths, BUMP, BEEF, and Atomic BEEF — how they fit together
-
-**SPV (BRC-67)** defines how a light client verifies that specific transactions really made it into specific blocks by validating Merkle paths against an independently obtained block-header chain. In a vault, “independent” means *not* trusting the sender or a single server; you bring your own header set or verify with at least two sources. ([GitHub][2])
-
-**BUMP (BRC-74)** is the *unified* Merkle path format used across BSV. It standardizes how proofs are encoded and checked. Your software takes the BUMP path, recomputes the Merkle root, and then checks that root against a known-good header at a given height. ([bsv.brc.dev][3])
-
-**BEEF (BRC-62)** is a compact container that bundles a subject transaction, its ancestors, and the Merkle paths needed to verify all inputs — the full validation payload without schlepping the entire chain. It’s designed so anyone who receives it can do SPV locally. In hex, you’ll recognize it by the `0100BEEF` little-endian version word. ([bsv.brc.dev][1])
-
-**Atomic BEEF (BRC-95)** is a stricter variant that guarantees everything in the container pertains to one “subject transaction.” No unrelated baggage, no ambiguity; it’s the operationally clean artifact you will demand from payers and the exact thing you export when you build & sign. ([bsv.brc.dev][4])
-
-**SDK reality check.** The BSV TypeScript SDK (`@bsv/sdk`) implements these ideas directly: you can deserialize BEEF/Atomic BEEF, resolve inputs, verify BUMP proofs using your header source via a `ChainTracker`, and sign P2PKH or custom scripts. The official examples show BEEF verification flows; the API includes helpers such as `Transaction.fromBEEF(...)`, `verify(...)`, `toAtomicBEEF()`, and the high-level primitives you’re already using in this app. ([docs.bsvblockchain.org][5])
-
-Takeaway: your vault is a deterministic SPV engine. If the Merkle root checks out against your independent headers, and the script transitions are valid, you can accept incoming or construct outgoing — all without trusting anyone’s node.
-
----
-
-## 2) Physical & environmental security (where “cold” really lives)
-
-### 2.1 Location selection
-
-Pick a room you can lock and control. You want: line-of-sight control of all ports and cables, no public windows, RF-quiet surroundings if possible, and space to film procedures. Your goal isn’t classified-grade TEMPEST, but you *do* care about emanations and shoulder-surfing. While formal TEMPEST levels are overkill for most, the public EMSEC guidance is clear: shielding, distance, and filtering reduce leakage. If you have neighbors on the other side of a thin wall, don’t put the air-gap there. ([Wikipedia][6])
-
-### 2.2 EMF/EMSEC hygiene
-
-At minimum: ferrite chokes on power leads, no unneeded antennas or wireless devices in the room, blinds or opaque film on windows, and keep sensitive screens away from exterior walls. If you want belt-and-suspenders, a modestly shielded enclosure or a grounded rack cabinet can deliver significant attenuation; public sources reference 60–100 dB insertion loss targets across broad bands for serious shielding. ([Wikipedia][6])
-
-### 2.3 Two-person rule
-
-Every vault session runs with two authorized operators present from unlock to relock. Neither person can complete a critical step alone (media access, password entry, file certification, signing). This practice is canon in COMSEC and other sensitive domains because it prevents single-actor compromise and mistakes. Use it. ([Wikipedia][7])
+- [Part I: Foundation](#part-i-foundation)
+  - [1. Scope and Goals](#1-scope-and-goals)
+  - [2. Protocol Fundamentals](#2-protocol-fundamentals)
+- [Part II: Environment Hardening](#part-ii-environment-hardening)
+  - [3. Facility Controls](#3-facility-controls)
+  - [4. Air-Gapped Workstations](#4-air-gapped-workstations)
+  - [5. Removable Media Workflow](#5-removable-media-workflow)
+  - [6. Credentials and Secret Storage](#6-credentials-and-secret-storage)
+- [Part III: Software Supply Chain](#part-iii-software-supply-chain)
+  - [7. Header Sources and SPV Inputs](#7-header-sources-and-spv-inputs)
+  - [8. Build and Release Flow](#8-build-and-release-flow)
+- [Part IV: Vault Operations](#part-iv-vault-operations)
+  - [9. Session Preparation](#9-session-preparation)
+  - [10. Receiving Atomic BEEF](#10-receiving-atomic-beef)
+  - [11. Building and Signing Outbound Transactions](#11-building-and-signing-outbound-transactions)
+  - [12. Saving, Hashing, and Archiving](#12-saving-hashing-and-archiving)
+  - [13. Incident Response and Recovery](#13-incident-response-and-recovery)
+- [Part V: Governance and Auditing](#part-v-governance-and-auditing)
+  - [14. Staffing and Oversight](#14-staffing-and-oversight)
+- [Appendices](#appendices)
+  - [Appendix A: Quick Reference Checklists](#appendix-a-quick-reference-checklists)
+  - [Appendix B: Ceremony Scripts](#appendix-b-ceremony-scripts)
+  - [Appendix C: Reference Specifications and Rationales](#appendix-c-reference-specifications-and-rationales)
 
 ---
 
-## 3) Air-gapped machines & removable media, done right
+## Part I: Foundation
 
-### 3.1 Air-gapped hardware
+### 1. Scope and Goals
 
-Acquire two identical laptops (primary and hot-spare) that will **never** touch a network. Wipe them and install a clean OS from a known-good offline image. Disable all radios in firmware if possible. The point isn’t magical immunity — Stuxnet proved media can bridge gaps — but controlled exposure. ([WIRED][8])
+The vault exists to sign and preserve Bitcoin SV transactions with the same repeatability as an aircraft pre-flight. This manual sets the minimum standard for:
 
-### 3.2 Clean-room USB workflow
+- Maintaining a physically isolated signing environment with evidentiary controls.
+- Enforcing Simplified Payment Verification (SPV) using independent block headers before money moves.
+- Ensuring every ingress and egress uses Atomic BEEF so proofs travel with the transaction.
+- Capturing tamper-evident logs, hashes, and operator attestations for every step.
 
-You’ll move data via flash drives. That’s risk. Counter it with process:
+Everything described here is mandatory unless a change is recorded, reviewed, and re-issued as a new manual revision.
 
-* **Media lifecycle.** Keep “IN” drives (headed *into* the air-gap) separate from “OUT” drives. Color code them. Every drive is serialized in a logbook.
-* **Scanning.** Before any “IN” drive touches an air-gapped machine, scan it on a standalone, sacrificial station with current AV and a *fully updated* signature set. Disable autorun everywhere. Consider a USB-scanning kiosk workflow if you have many sessions. ([Splunk][9])
-* **Write protection.** Use hardware write-protect toggles where practical. When you only need to *read*, set the tab. ([Industrial Cyber][10])
-* **Sanitization.** When a drive changes trust zones or is retired, sanitize it per NIST SP 800-88 — or the draft Rev.2 when finalized. Crypto-erase or vendor Secure Erase for SSDs; verify. Document the method and result. ([NIST Computer Security Resource Center][11])
+### 2. Protocol Fundamentals
 
-Remember: malware can exfiltrate via sneaky channels (LEDs, ultrasound, RF). Keep phones out; cover indicator LEDs if needed; don’t face screens toward windows. ([WIRED][12])
+A cold vault is ultimately an SPV engine. The software uses the BSV TypeScript SDK to enforce the following standards end to end:
 
----
+- **SPV — BRC-67.** Transactions are trusted only when their Merkle path recomputes the block root and the root matches a header you obtained independently.[brc-67]
+- **BUMP — BRC-74.** All Merkle paths arrive in the BUMP format, letting the SDK verify multiple transaction proofs from the same block in a consistent structure.[brc-74]
+- **BEEF — BRC-62.** BEEF containers bundle a subject transaction, its ancestors, and the proofs you need to validate inputs locally. Hex payloads are versioned with `0100BEEF` by design.[brc-62]
+- **Atomic BEEF — BRC-95.** Operations demand Atomic BEEF so every artifact pertains to exactly one subject transaction. Incoming artifacts are rejected unless they meet this stricter envelope; outgoing artifacts are exported in the same format.[brc-95]
+- **SDK trust, but verify.** We lean on `@bsv/sdk` APIs such as `Transaction.fromBEEF`, `verify`, and `ChainTracker` to parse proofs, but operators confirm the headers on camera and record the sources used.[sdk-docs]
 
-## 4) Passwords, key derivation, and secrets splitting
-
-### 4.1 Password policy and PBKDF2
-
-The app enforces **≥12 chars** with upper/lower/digit/symbol, and a **minimum of 80,000 PBKDF2 rounds**. That’s fine; in practice we recommend *longer* passphrases (16–20+) composed for memorability, and no forced rotation absent evidence of compromise — consistent with modern NIST thinking that favors length over baroque complexity. For rounds, 80k is a sane floor in JavaScript contexts; raise it as performance allows. Document your chosen parameter. ([NIST Pages][13])
-
-### 4.2 Shamir Secret Sharing (optional, for password escrow)
-
-If you must escrow the vault passphrase for business continuity, use a (t, n) Shamir scheme with verifiable procedures for distributing shares and reconstructing only under dual control. Shamir’s 1979 construction is information-theoretically secure: *any* t shares recover, *fewer than t* reveal nothing. Do reconstruction only in controlled ceremonies, air-gapped, on throwaway hardware. ([Massachusetts Institute of Technology][14])
+Key takeaway: if the Merkle root does not match your headers from at least two sources, the vault session stops.
 
 ---
 
-## 5) Header discipline: don’t trust; verify twice
+## Part II: Environment Hardening
 
-Your SPV checks are only as good as your headers source. Maintain two independent ways to confirm the current tip height and the merkle root for a given height: e.g., a locally curated header set plus a second source you query during sessions. The point is to cross-check BUMP roots — “trust but verify” as a rule, not a slogan. ([GitHub][2])
+### 3. Facility Controls
 
----
+- Select a lockable room where you control sightlines, cables, and lighting. Avoid public-facing windows; if unavoidable, apply opaque film or blinds.[tempest]
+- Keep the space RF-quiet: remove unused antennas, disable wireless gear, and position sensitive screens away from exterior walls. Light shielding or a grounded rack can provide 60–100 dB attenuation when needed.[tempest]
+- Only approved equipment enters the room. Phones stay outside, indicator LEDs can be covered, and any external visitors are logged.
+- All sessions run under the two-person rule: no critical action (media handling, password entry, signing, certifications) happens without two trained operators present from unlock to relock.[two-person]
 
-## 6) The application model you’re running
+### 4. Air-Gapped Workstations
 
-The provided React/TypeScript application wraps the BSV TS SDK. A few design choices you should be mindful of:
+- Provision two identical laptops (primary and hot spare) that will never touch a network. Install the OS from a known-good, offline image and disable radios in firmware when possible.[wired-airgap]
+- Maintain a build history for each machine: installation media hash, date of provisioning, firmware versions, and any applied patches.
+- Record BIOS/UEFI passwords and tamper-evident seals in the logbook. Break a seal only on camera with dual signatures authorizing the action.
+- Remember that air gaps reduce attack surface but do not eliminate it. Media remains the likely infection path; vigilance around USB handling is mandatory.[wired-led]
 
-* **Vault file:** Encrypted payload (PBKDF2 with a salt you generate on the air-gap). Your “plaintext” includes keys, coins, logs, settings, and a global BEEF store.
-* **Keys:** Locally generated via device RNG, with an option to mix user entropy.
-* **Incoming:** You **require** SPV-valid Atomic BEEF. The app extracts matches to your keys, verifies BUMP/headers via `ChainTracker`, and admits only what you select.
-* **Outgoing:** You must hand-select inputs and change keys; the app signs, then **forces** you to export Atomic BEEF before marking as processed.
-* **Logs:** Two classes — session (ephemeral) and vault (permanent). Both are text-exportable for audits.
+### 5. Removable Media Workflow
 
-All of this maps onto the SDK’s `Transaction`, `P2PKH`, `Beef`, and `ChainTracker` primitives, which implement BRC-62/67/74/95. ([docs.bsvblockchain.org][5])
+- Maintain separate, serialized inventories for `IN` (toward the air gap) and `OUT` (away from the air gap) drives. Color-code and lock them when not in use.
+- Before a drive enters the vault, scan it on a dedicated staging workstation with current signatures. Disable autorun everywhere and keep the scanner itself off production networks when inactive.[splunk]
+- Prefer hardware write-protect toggles when media only needs to be read. Set the switch before crossing the air gap.[industrial-cyber]
+- When media changes trust zones or is retired, sanitize it following NIST SP 800-88 guidance (crypto-erase for SSDs, verified overwrites for spinning disks). Record the method, tool, operator, and result.[nist-800-88]
+- Treat detachable batteries and firmware on USB devices as potential attack vectors. Acquire media from reputable suppliers and inspect housings regularly.
 
----
+### 6. Credentials and Secret Storage
 
-## 7) Standard Operating Procedures (SOPs)
-
-What follows is the exact choreography. Every session is filmed end-to-end, with a slate showing date, time, operators, and purpose. Two-person rule active throughout.
-
-### 7.1 Commissioning the vault room (one-time)
-
-Arrive with empty machines and new media still in packaging. Film the unboxing. Install OS from an offline image you prepared elsewhere. Disable radios in firmware. Apply window film or close blinds; position machines away from exterior walls. Label the room and cabinets. Place a printed checklist and a logbook on clipboards mounted by the door. (EMSEC notes above.) ([Wikipedia][6])
-
-### 7.2 Preparing removable media (per batch)
-
-On a networked *staging* box: download the app build and any documentation. Copy to a fresh “IN” USB drive. Scan it with two different engines. Apply a tamper-evident seal over the USB cap with the serial and hash manifest on the seal (QR okay). Log the drive ID.
-
-On the sacrificial scanning station just outside the vault: rescan, confirm expected hashes. Break the seal on camera, read the serial aloud, and hand to Operator-B on the air-gap.
-
-### 7.3 Creating a new vault (air-gap)
-
-1. **Launch app.** Read the legal disclaimers.
-2. **Name the vault** and set **PBKDF2 rounds** (≥80,000). Record these in the logbook. ([NIST Pages][13])
-3. **Salt & randomness.** If you distrust device RNG, enable user-entropy and follow the two-prompt flow; mix both sources as the app does.
-4. **Password ceremony.** Compose the passphrase verbally (no filming of keys), type by Operator-A, confirmed by Operator-B eyes-on. Record only password policy compliance, not the secret.
-5. **Header policy.** Set persistence thresholds and re-verification cadence.
-6. **Set two-person flags:** require attestations for incoming/outgoing coins.
-7. **Record current block height** using independent sources and enter it. Videotape both sources in the frame. ([GitHub][2])
-8. **Save and certify.** Export the vault file; compute and read aloud the SHA-256 on camera; print the hash on a paper checksum slip. Confirm operators wrote the same hash, then seal the slip in an envelope labeled with the vault rev and date.
-
-### 7.4 Generating a deposit key
-
-Generate a new key with a memo. Immediately produce the “deposit slip” text (address, P2PKH script, pubkey hash) and store it on an “OUT” drive for distribution to payers, plus a paper print if desired. Mark keys used on-chain once funds arrive to reduce reuse risk.
-
-### 7.5 Processing incoming funds (Atomic BEEF required)
-
-1. Receive **Atomic BEEF hex** from the payer *on paper and on an “IN” drive.*
-2. On the air-gap, paste or import the hex.
-3. The app performs **SPV verification**: it checks BUMP merkle roots against your headers. On camera, show the headers confirmation. If verification fails, **reject**. ([docs.bsvblockchain.org][15])
-4. Review which outputs pay your keys; admit only the ones you approve; annotate UTXO memos.
-5. Classify transaction “processed” only after independent confirmation that the network has mined/confirmed it (your policy: minimum N blocks).
-6. **Merge BEEF** into the store and **save the vault**; re-compute and certify the file hash; seal the prior revision as invalid; destroy per policy. (Sanitization guidance at 800-88.) ([NIST Computer Security Resource Center][11])
-
-### 7.6 Building and signing an outgoing transaction
-
-1. Define outputs: destination address or full script, sats, and memo.
-2. Manually select inputs (by coin ID). If inputs derive from unprocessed parents, the app will warn you; review and proceed only if intentional.
-3. Choose **change keys** (prefer new/unseen keys). The app warns on reuse; heed it to preserve privacy.
-4. Enable **per-UTXO attestation** if your policy requires it: both operators inspect the input’s on-chain state and certify.
-5. Build fees; sign.
-6. Export **Atomic BEEF** to an “OUT” drive and deliver to the counterparty/processor for broadcast. The vault marks the outgoing as “pending” until you certify it as processed.
-7. Save and certify the new vault revision; destroy old revisions. (Document the exact SHA-256 at save time; store the checksum in a separate, sealed envelope.) ([bsv.brc.dev][4])
-
-### 7.7 Header verification procedure (per session)
-
-At session start, re-query the current height from Source-A and Source-B; note the absolute value on the whiteboard. For any BUMP proof you rely on, compute the root from the proof, then confirm that root against your known header at the claimed height. If it’s older than your “persist after N blocks” threshold, persist the claim with a memo citing the sources you used. ([bsv.brc.dev][3])
-
-### 7.8 Log management & audits
-
-Export the **vault log** and **session log** at the end of every session to an “OUT” drive, and print to paper for the binder. Read a random sample of entries on camera to prove continuity. The logs are sanitized by design (no secrets) but contain enough detail for forensics.
+- Passphrases must be at least 12 characters; in practice we recommend memorable 16–20+ character phrases aligned with modern NIST guidance favoring length over complexity tricks.[nist-63b]
+- The application enforces a minimum of 80,000 PBKDF2 rounds. Evaluate higher values periodically and document your chosen parameter.
+- Password composition ceremonies happen in the vault with Operator A typing and Operator B eyes-on verifying; cameras record compliance, not the secret itself.
+- If you must escrow the passphrase, use a t-of-n Shamir Secret Sharing scheme and store each share in separately controlled safes. Reconstruction takes place only during documented continuity exercises with dual control.[shamir]
 
 ---
 
-## 8) Hygiene around keys, change, and UTXOs
+## Part III: Software Supply Chain
 
-Use **fresh keys** for receipts and **fresh change keys** to avoid linkage. Your app flags reuse; resist the urge to ignore it. Summarize UTXO sets on the dashboard and keep memos crisp; during audit, you should be able to narrate why each UTXO exists and how it will be spent.
+### 7. Header Sources and SPV Inputs
 
----
+- Maintain two independent header sources (for example, a curated local header set and a second provider you snapshot at session start).
+- Record the height and hash obtained from each source on camera at the start of every session. Keep screenshots or printed outputs alongside the session log.
+- For every BUMP proof relied upon, derive the Merkle root locally and match it against both header sources. Any mismatch halts the session pending investigation.[brc-74][brc-67]
 
-## 9) File integrity: hashes, seals, and paper trails
+### 8. Build and Release Flow
 
-Every vault save is followed by a SHA-256, recorded twice (operator A and B) and matched on camera. The checksum is printed or handwritten on a checksum card tagged with revision, date, and time; the card is sealed and stored separately from the drive. At the next load, confirm the hash of the file *before* decrypting — your software already prompts this; treat it as mandatory. (Media handling and destruction per NIST 800-88.) ([NIST Computer Security Resource Center][11])
+All software provisioning happens on a network-connected build workstation that never enters the air-gapped room.
 
----
+#### 8.1 Prepare the Build Workstation
 
-## 10) Password rotation (don’t churn; rotate with purpose)
+1. Install Node.js 20.19+ (or 22.12+) and npm 10+. Verify versions with `node --version` and `npm --version`.
+2. Clone or update the repository. Record commit IDs for each build you promote.
 
-Rotate only for cause (policy change, staff change, suspected exposure) or at measured intervals that your team can execute *without error*. When rotating, generate a new salt, re-derive PBKDF2 with your chosen rounds, and **immediately save and certify** the vault file. NIST’s current stance favors strong, longer passwords and discourages frequent forced changes that create user workarounds; we follow that philosophy. ([NIST Pages][13])
+#### 8.2 Produce an Offline Bundle
 
----
+1. From the repository root, run `npm ci` if you maintain the top-level automation scripts.
+2. `cd frontend`
+3. `npm ci`
+4. `npm run build -- --base ./` to emit a static bundle under `frontend/build/`.
 
-## 11) Incident response
+#### 8.3 Verify Artifacts
 
-If an “IN” drive fails post-scan checks, quarantine it, film the quarantine, and record its serial. If any outgoing BEEF appears malformed or repeatedly fails external processing, consider the signing machine contaminated: halt operations, export logs, reimage from known-good offline media, and re-establish trust chains (headers, checksums, operator rosters).
+1. Optionally smoke-test the bundle using `npm run preview`, but do not connect the machine to production networks.
+2. Generate hashes inside `frontend/build/`:  
+   `shasum -a 256 * assets/* > SHA256SUMS.txt`
+3. Record the SHA-256 of the entire bundle (zip or directory) in the build logbook and have two operators sign off.
 
----
+#### 8.4 Transfer into the Air Gap
 
-## 12) Frequently used SDK/format facts you will cite in audits
-
-* **BRC-62**: Background Evaluation Extended Format (BEEF) — compact transport for tx + inputs + proofs; the `0100BEEF` marker is by design; validation rules reference raw tx (BRC-12) and BUMP (BRC-74). ([bsv.brc.dev][1])
-* **BRC-67**: SPV — clients validate Merkle paths against headers, not “trust nodes.” ([GitHub][2])
-* **BRC-74**: BUMP proof format — one block, many txids, their paths, and the block height. ([bsv.brc.dev][3])
-* **BRC-95**: Atomic BEEF — single subject transaction, strict atomicity for operational clarity. ([bsv.brc.dev][4])
-* **TS SDK**: `Transaction.fromBEEF`, `verify(chainTracker)`, `toAtomicBEEF`, `P2PKH.lock/unlock`, `Beef.mergeBeef`, etc. Official docs and examples show end-to-end verification. ([docs.bsvblockchain.org][5])
-
----
-
-## 13) Ceremony templates (read-aloud scripts)
-
-**Session open:**
-“Session start. Date/time: ___. Operators A and B present. Purpose: ___. Room swept, phones outside, air-gap verified. Media staging complete; ‘IN’ drive serial ___ inspected and scanned. Proceeding.”
-
-**Incoming BEEF:**
-“Atomic BEEF for TXID ___ loaded. SPV verification succeeded against header source A height ___ and source B height ___. Outputs matched to keys: ___. Admitting vout(s) ___ as per policy.”
-
-**Outgoing sign:**
-“Outputs reviewed. Inputs selected: ___. Change keys: ___. Per-UTXO attestations performed (Yes/No). Transaction signed; Atomic BEEF exported to ‘OUT’ drive serial ___. Pending processed confirmation.”
-
-**Save & certify:**
-“Saving vault rev ___. SHA-256: ___. Dual entry matched. Old rev sealed for destruction per 800-88; destruction scheduled.”
+1. Copy the `frontend/build/` contents and `SHA256SUMS.txt` to an `IN` drive that already passed the scanning workflow.
+2. Seal the drive with tamper tape, annotate the chain-of-custody log, and escort it to the vault.
+3. Inside the vault, verify the recorded hashes before use. Serve the bundle using a local-only HTTP server (for example, `python3 -m http.server 4173`) or equivalent offline kiosk.
 
 ---
 
-## 14) Governance and staffing
+## Part IV: Vault Operations
 
-Maintain an operator roster with background checks proportional to the value under custody. Train alternates. Force vacation and cross-checks. Enforce the two-person rule literally — not one and a friend drifting in later. Use a real auditor once a year to sit in on a full session and attempt a red-team walkthrough of the procedures.
+### 9. Session Preparation
+
+- Two authorized operators unlock the room, start video recording, and sweep the area for unauthorized devices. Phones and smart watches remain outside.
+- Document the session purpose, date, time, operator names, and vault revision in the logbook and on camera.
+- Stage sanitized `IN` and `OUT` drives within sight. Read their serial numbers aloud.
+- Reconfirm header sources (Section 7) and note the heights and hashes on camera.
+- Load the vault file from the most recent certified media, verify its SHA-256 against the sealed checksum card, and document the match before decrypting.
+
+### 10. Receiving Atomic BEEF
+
+1. Obtain Atomic BEEF hex from the payer both on paper and on an `IN` drive.
+2. Import or paste the payload into the application. The SDK validates the structure and recomputes the Merkle root.
+3. On camera, confirm that the computed root matches both header sources. Any failure results in immediate rejection and a log entry.[sdk-example]
+4. Review the outputs that target your keys, annotate memos, and approve only the ones that comply with policy.
+5. Mark the transaction as “processed” only after it reaches your required confirmation depth; record the height and evidence used.
+6. Merge the BEEF into the vault store, save a new vault revision, and certify the hash as described in Section 12.
+
+### 11. Building and Signing Outbound Transactions
+
+1. Define destination outputs (script or address, sats, memo) and capture approvals on camera.
+2. Manually select inputs. If a parent transaction is unprocessed, the software warns you; resolve before proceeding unless you intentionally spend zero-conf.
+3. Choose fresh change keys. Reuse is discouraged and flagged in the UI.
+4. Perform per-UTXO attestations when policy requires it—both operators confirm the input’s on-chain state and sign the attestation log.
+5. Build fees and sign. The application exports Atomic BEEF to an `OUT` drive; treat this as the authoritative artifact for downstream broadcast.
+6. Mark the transaction “pending” until you receive independent confirmation it was mined. Update memos with the block height and proof sources.
+
+### 12. Saving, Hashing, and Archiving
+
+- After any state change (incoming, outgoing, rotation), save the vault file and compute its SHA-256. Operator A reads the hash aloud; Operator B verifies and repeats it.
+- Record the hash in the session log, print or hand-write it on a checksum card, and seal the card in an envelope stored separately from digital media.
+- Retire prior vault revisions immediately. Follow NIST SP 800-88 sanitization guidance to destroy or sanitize superseded media and log the action.[nist-800-88]
+- Export session logs, vault logs, and any supporting attachments to an `OUT` drive. Print representative pages for the physical binder.
+
+### 13. Incident Response and Recovery
+
+- Quarantine any `IN` drive that fails scanning or triggers antivirus during the session. Bag it, label it, and film the chain of custody for forensic review.
+- If an outgoing artifact repeatedly fails validation downstream, treat the signing workstation as potentially compromised. Halt operations, export logs, and re-image the machine from a known-good offline installer.
+- Document every anomaly in the incident ledger and escalate to leadership. Resume normal operations only after the root cause is identified and mitigated.
 
 ---
 
-## 15) Appendices
+## Part V: Governance and Auditing
 
-**A. Why we insist on Atomic BEEF** — it’s simpler to reason about and audit: one subject transaction, proofs for exactly its inputs, no unrelated baggage. That tight scope reduces attack surface and operator confusion. (See BRC-95.) ([bsv.brc.dev][4])
+### 14. Staffing and Oversight
 
-**B. Why we film** — video gives you a tamper-evident narrative of every material step; in custody disputes or post-mortems, it’s priceless.
-
-**C. Why we don’t auto-broadcast** — the vault is for *authoritative signing and evidence gathering*, not network participation. Peers broadcast; you retain proof you built the right thing.
-
-**D. Air-gap reality** — USB-borne malware is still a thing; kiosk-style scanning and strict zone controls are what keep you safe, not magical isolation. ([WIRED][16])
-
-**E. Sanitization crib** — when media leaves your control or shifts zones, sanitize per NIST 800-88 (or Rev.2 when finalized); prefer crypto-erase/Secure Erase on SSDs; document the method and result. ([NIST Computer Security Resource Center][11])
+- Maintain an operator roster with background checks proportional to assets under custody. Train alternates and require periodic cross-checks.
+- Enforce forced vacation policies so no operator controls the vault without peer observation for extended periods.
+- Schedule at least one third-party audit annually. Auditors should observe a full session, spot-check logs, and attempt a red-team walkthrough of procedures.
+- Update training materials whenever the software or manual changes. Operators attest in writing that they read the latest revision before their next session.
 
 ---
 
-## 16) Final checklist for day-to-day operations
+## Appendices
 
-Operate like this is money — because it is:
+### Appendix A: Quick Reference Checklists
 
-* Two people. Camera rolling.
-* Clean “IN” drive; scan; no autorun; write-protect. ([Splunk][9])
-* SPV or it didn’t happen: BUMP → root → header(s) you trust. ([bsv.brc.dev][3])
-* Save → hash → dual-record → seal → destroy old. ([NIST Computer Security Resource Center][11])
-* Fresh change keys; avoid reuse.
-* Logs exported each session; binder updated.
-* Paper checksum slips kept separate from media.
+**Session Opening**
 
-Run this like a flight deck: slow is smooth, smooth is fast.
+1. Room secured, video recording started.  
+2. Operators A & B present; phones removed.  
+3. Header sources queried; heights and hashes recorded.  
+4. `IN`/`OUT` drives verified and serials logged.  
+5. Vault file hash matched against sealed checksum card.
+
+**Incoming Atomic BEEF**
+
+1. Payload imported from paper and `IN` drive.  
+2. Merkle root matches Source A and Source B.  
+3. Outputs reviewed, memos updated, approvals recorded.  
+4. Required confirmations reached; proofs captured.  
+5. Vault saved, hash certified, prior media sanitized.
+
+**Outgoing Transaction**
+
+1. Destination scripts and amounts approved.  
+2. Inputs and change keys selected; reuse warnings resolved.  
+3. Per-UTXO attestations signed.  
+4. Atomic BEEF exported to `OUT` drive.  
+5. Vault saved, pending status noted pending confirmations.
+
+**Vault Save & Certification**
+
+1. SHA-256 computed and read aloud by both operators.  
+2. Hash recorded in logbook and on checksum card.  
+3. Card sealed separately from media.  
+4. Previous revision destroyed per NIST SP 800-88.  
+5. Logs exported to `OUT` drive and binder updated.
+
+### Appendix B: Ceremony Scripts
+
+Use these verbatim reads on camera to anchor your evidence record.
+
+- **Session open:**  
+  “Session start. Date/time: ___. Operators A and B present. Purpose: ___. Room swept, phones outside, air-gap verified. Media staging complete; `IN` drive serial ___ inspected and scanned. Proceeding.”
+- **Incoming BEEF:**  
+  “Atomic BEEF for TXID ___ loaded. SPV verification succeeded against header source A height ___ and source B height ___. Outputs matched to keys: ___. Admitting vout(s) ___ as per policy.”
+- **Outgoing sign:**  
+  “Outputs reviewed. Inputs selected: ___. Change keys: ___. Per-UTXO attestations performed (Yes/No). Transaction signed; Atomic BEEF exported to `OUT` drive serial ___. Pending processed confirmation.”
+- **Save & certify:**  
+  “Saving vault rev ___. SHA-256: ___. Dual entry matched. Old rev sealed for destruction per 800-88; destruction scheduled.”
+
+### Appendix C: Reference Specifications and Rationales
+
+- [BRC-62 — Background Evaluation Extended Format][brc-62]: container for subject transactions, ancestors, and proofs. Recognizable by the `0100BEEF` version word.
+- [BRC-67 — Simplified Payment Verification][brc-67]: defines the Merkle-path verification model underpinning every acceptance decision.
+- [BRC-74 — BSV Unified Merkle Path][brc-74]: standard proof format for verifying multiple transaction paths per block.
+- [BRC-95 — Atomic BEEF][brc-95]: enforces single-subject scope for proofs you import or export.
+- [BSV TypeScript SDK documentation][sdk-docs] and [Atomic BEEF verification example][sdk-example]: APIs used by the application for parsing, verifying, and exporting proofs.
+- [TEMPEST/EMSEC overview][tempest]: public guidance on limiting emanations.
+- [USB threat advisories][industrial-cyber] and [air-gap case studies][wired-airgap][wired-led]: reminders that removable media remains the likeliest attack vector.
+- [NIST SP 800-63B password guidance][nist-63b] and [NIST SP 800-88 media sanitization guidance][nist-800-88]: normative references for password policy and data destruction.
+- **Operational rationales:**
+  - *Atomic BEEF only:* reducing ambiguity keeps audits simple and limits the blast radius of malformed inputs.
+  - *Video evidence:* a continuous recording provides a tamper-evident chain of custody for people, media, and procedures.
+  - *No auto-broadcast:* the vault is for authoritative signing and evidence gathering; broadcasting remains a networked function outside the air gap.
+  - *Strict media lifecycle:* USB-borne malware still exists; kiosks, scanning, and sanitization are your firewall.
 
 ---
 
-### References (primary)
-
-BRC-62 (BEEF), BRC-67 (SPV), BRC-74 (BUMP), BRC-95 (Atomic BEEF), official SDK docs and examples. These are the standards your vault procedures implement and the APIs your software uses to enforce them. ([bsv.brc.dev][1])
-
-(Additional sources supporting EMSEC, removable-media, and password guidance are cited inline where we rely on them.)
-
-[1]: https://bsv.brc.dev/transactions/0062?utm_source=chatgpt.com "Background Evaluation Extended Format (BEEF) Transactions"
-[2]: https://raw.githubusercontent.com/bitcoin-sv/BRCs/master/transactions/0067.md?utm_source=chatgpt.com "https://raw.githubusercontent.com/bitcoin-sv/BRCs/..."
-[3]: https://bsv.brc.dev/transactions/0074?utm_source=chatgpt.com "BSV Unified Merkle Path (BUMP) Format - README | BRC"
-[4]: https://bsv.brc.dev/transactions/0095?utm_source=chatgpt.com "Atomic BEEF Transactions - README | BRC"
-[5]: https://docs.bsvblockchain.org/guides/sdks/ts?utm_source=chatgpt.com "TypeScript - BSV Skills Center"
-[6]: https://en.wikipedia.org/wiki/Tempest_%28codename%29?utm_source=chatgpt.com "Tempest (codename)"
-[7]: https://en.wikipedia.org/wiki/Two-person_rule?utm_source=chatgpt.com "Two-person rule"
-[8]: https://www.wired.com/2014/12/hacker-lexicon-air-gap?utm_source=chatgpt.com "Hacker Lexicon: What Is an Air Gap?"
-[9]: https://www.splunk.com/en_us/blog/learn/cis-critical-security-controls.html?utm_source=chatgpt.com "CIS Critical Security Controls: The Complete Guide"
-[10]: https://industrialcyber.co/nist/nist-publication-warns-that-usb-devices-pose-serious-cybersecurity-threats-to-ics-offers-guidance-for-mitigation/?utm_source=chatgpt.com "NIST publication warns that USB devices pose serious ..."
-[11]: https://csrc.nist.gov/pubs/sp/800/88/r1/final?utm_source=chatgpt.com "SP 800-88 Rev. 1, Guidelines for Media Sanitization | CSRC"
-[12]: https://www.wired.com/2017/02/malware-sends-stolen-data-drone-just-pcs-blinking-led?utm_source=chatgpt.com "Malware Lets a Drone Steal Data by Watching a Computer's Blinking LED"
-[13]: https://pages.nist.gov/800-63-3/sp800-63b.html?utm_source=chatgpt.com "NIST Special Publication 800-63B"
-[14]: https://web.mit.edu/6.857/OldStuff/Fall03/ref/Shamir-HowToShareASecret.pdf?utm_source=chatgpt.com "How to Share a Secret"
-[15]: https://docs.bsvblockchain.org/guides/sdks/ts/examples/example_verifying_beef?utm_source=chatgpt.com "Verifying a BEEF Structure | BSV Skills Center"
-[16]: https://www.wired.com/story/china-usb-sogu-malware?utm_source=chatgpt.com "Chinese Spies Infected Dozens of Networks With Thumb Drive Malware"
+[brc-62]: https://bsv.brc.dev/transactions/0062?utm_source=chatgpt.com "Background Evaluation Extended Format (BEEF) Transactions"
+[brc-67]: https://raw.githubusercontent.com/bitcoin-sv/BRCs/master/transactions/0067.md?utm_source=chatgpt.com "Simplified Payment Verification"
+[brc-74]: https://bsv.brc.dev/transactions/0074?utm_source=chatgpt.com "BSV Unified Merkle Path (BUMP) Format"
+[brc-95]: https://bsv.brc.dev/transactions/0095?utm_source=chatgpt.com "Atomic BEEF Transactions"
+[sdk-docs]: https://docs.bsvblockchain.org/guides/sdks/ts?utm_source=chatgpt.com "TypeScript SDK — BSV Skills Center"
+[sdk-example]: https://docs.bsvblockchain.org/guides/sdks/ts/examples/example_verifying_beef?utm_source=chatgpt.com "Verifying a BEEF Structure"
+[tempest]: https://en.wikipedia.org/wiki/Tempest_%28codename%29?utm_source=chatgpt.com "TEMPEST"
+[two-person]: https://en.wikipedia.org/wiki/Two-person_rule?utm_source=chatgpt.com "Two-person rule"
+[wired-airgap]: https://www.wired.com/2014/12/hacker-lexicon-air-gap?utm_source=chatgpt.com "Hacker Lexicon: What Is an Air Gap?"
+[wired-led]: https://www.wired.com/2017/02/malware-sends-stolen-data-drone-just-pcs-blinking-led?utm_source=chatgpt.com "Malware Lets a Drone Steal Data by Watching a Computer's Blinking LED"
+[splunk]: https://www.splunk.com/en_us/blog/learn/cis-critical-security-controls.html?utm_source=chatgpt.com "CIS Critical Security Controls"
+[industrial-cyber]: https://industrialcyber.co/nist/nist-publication-warns-that-usb-devices-pose-serious-cybersecurity-threats-to-ics-offers-guidance-for-mitigation/?utm_source=chatgpt.com "USB Device Threat Advisory"
+[nist-800-88]: https://csrc.nist.gov/pubs/sp/800/88/r1/final?utm_source=chatgpt.com "SP 800-88 Rev.1 Guidelines for Media Sanitization"
+[nist-63b]: https://pages.nist.gov/800-63-3/sp800-63b.html?utm_source=chatgpt.com "NIST SP 800-63B Digital Identity Guidelines"
+[shamir]: https://web.mit.edu/6.857/OldStuff/Fall03/ref/Shamir-HowToShareASecret.pdf?utm_source=chatgpt.com "How to Share a Secret"
