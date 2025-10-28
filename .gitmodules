@@ -1,0 +1,3 @@
+[submodule "funding-util"]
+	path = funding-util
+	url = git@github.com:p2ppsr/funding-util
