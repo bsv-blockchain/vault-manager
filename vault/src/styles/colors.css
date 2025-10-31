@@ -1,0 +1,14 @@
+/* Color Palette */
+:root {
+  --color-red: #8b0000;
+  --color-green: #0a7b22;
+  --color-blue: #1e6bd6;
+  --color-gray-600: #555;
+  --color-gray-700: #333;
+  --color-border: #ddd;
+  --color-light: #f7f7f8;
+  --color-panel: #ffffff;
+  --color-success: #4CAF50;
+  --color-error: #8b0000;
+  --color-info: #2196F3;
+}

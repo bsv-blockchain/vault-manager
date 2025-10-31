@@ -1,0 +1,5 @@
+/* Main stylesheet - imports all other CSS files */
+@import './colors.css';
+@import './common.css';
+@import './buttons.css';
+@import './inputs.css';

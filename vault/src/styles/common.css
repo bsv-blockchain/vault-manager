@@ -1,0 +1,55 @@
+/* Common Layout Styles */
+.app-shell {
+  font-family: Inter, system-ui, -apple-system, Segoe UI, Roboto, sans-serif;
+  background: var(--color-light);
+  min-height: 100vh;
+  height: 100%;
+  color: var(--color-gray-700);
+  color-scheme: light;
+  overflow: hidden;
+  overscroll-behavior: none;
+  display: flex;
+  flex-direction: column;
+}
+
+.container {
+  padding: 12px;
+  max-width: 1180px;
+  margin: 0 auto;
+  width: 100%;
+  box-sizing: border-box;
+  flex: 1 1 auto;
+  overflow-y: auto;
+}
+
+.panel {
+  background: var(--color-panel);
+  border: 1px solid var(--color-border);
+  border-radius: 8px;
+  padding: 12px;
+  box-shadow: 0 2px 10px rgba(0, 0, 0, 0.03);
+}
+
+.section {
+  background: var(--color-panel);
+  border: 1px solid var(--color-border);
+  border-radius: 8px;
+  padding: 12px;
+  box-shadow: 0 2px 10px rgba(0, 0, 0, 0.03);
+  margin-bottom: 12px;
+}
+
+.tab {
+  background: transparent;
+  color: var(--color-gray-700);
+  border: none;
+  border-radius: 999px;
+  padding: 8px 12px;
+  cursor: pointer;
+  white-space: nowrap;
+}
+
+.tab-active {
+  background: var(--color-blue);
+  color: #fff;
+}

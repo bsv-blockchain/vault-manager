@@ -1,0 +1,34 @@
+/* Button Styles */
+.btn {
+  background: var(--color-blue);
+  color: white;
+  border: none;
+  padding: 12px 14px;
+  border-radius: 8px;
+  cursor: pointer;
+  width: 100%;
+  max-width: 240px;
+  touch-action: manipulation;
+}
+
+.btn-ghost {
+  background: #777;
+  color: #fff;
+  border: none;
+  padding: 12px 14px;
+  border-radius: 8px;
+  cursor: pointer;
+  width: 100%;
+  max-width: 240px;
+  touch-action: manipulation;
+}
+
+.btn-remove {
+  background: var(--color-red);
+  color: white;
+  border: none;
+  padding: 8px 12px;
+  border-radius: 6px;
+  cursor: pointer;
+  font-size: 13px;
+}

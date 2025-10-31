@@ -1,0 +1,33 @@
+/* Input Styles */
+.input {
+  border: 1px solid var(--color-border);
+  border-radius: 8px;
+  padding: 10px 12px;
+  width: 100%;
+  max-width: 100%;
+  box-sizing: border-box;
+  background: #fff;
+  color: #111;
+  caret-color: #111;
+}
+
+.toggle-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 8px 0;
+  gap: 12px;
+}
+
+.toggle-help {
+  font-size: 13px;
+  color: var(--color-gray-600);
+  margin-left: 24px;
+}
+
+.advanced-box {
+  border: 2px dashed var(--color-border);
+  border-radius: 8px;
+  padding: 12px;
+  margin-top: 12px;
+}
