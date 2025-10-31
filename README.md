@@ -1,4 +1,4 @@
-# BSV Vault Manager Suite
+# Vault Manager
 
 Offline-first tooling for operating a high-assurance Bitcoin SV cold vault. The application keeps signing decisions inside an air gap, enforces SPV with operator-supplied headers, and requires Atomic BEEF for every transaction artifact.
 
