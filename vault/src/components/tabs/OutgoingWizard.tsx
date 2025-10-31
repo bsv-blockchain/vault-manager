@@ -25,19 +25,6 @@ const COLORS = {
   border: '#ddd'
 }
 
-/**
- * Estimate transaction fee based on approximate size.
- * Standard P2PKH: ~148 bytes per input, ~34 bytes per output
- * Fee rate: 1 sat/byte (conservative default)
- */
-function estimateFee(numInputs: number, numOutputs: number, feeRate: number = 1): number {
-  const BASE_SIZE = 10 // version (4) + locktime (4) + overhead (~2)
-  const INPUT_SIZE = 148 // typical P2PKH input
-  const OUTPUT_SIZE = 34 // typical P2PKH output
-  const estimatedSize = BASE_SIZE + (numInputs * INPUT_SIZE) + (numOutputs * OUTPUT_SIZE)
-  return Math.ceil(estimatedSize * feeRate)
-}
-
 const OutgoingWizard: FC<OutgoingWizardProps> = ({ vault, onUpdate, notify }) => {
   const dialog = useDialog()
   type Step = 1 | 2 | 3 | 4 | 5
@@ -112,41 +99,6 @@ const OutgoingWizard: FC<OutgoingWizardProps> = ({ vault, onUpdate, notify }) =>
     }
     return sum
   }, [manualInputs, vault.coins, vault.beefStore])
-
-  // Calculate total available balance in the vault
-  const totalBalance = useMemo(() => {
-    let sum = 0
-    for (const c of vault.coins) {
-      try {
-        const tx = getTxFromStore(vault.beefStore, c.txid)
-        sum += tx.outputs[c.outputIndex].satoshis as number
-      } catch {}
-    }
-    return sum
-  }, [vault.coins, vault.beefStore])
-
-  // Handler for "Max" button - fills in the amount with total balance minus estimated fee
-  const handleSetMaxAmount = useCallback((index: number) => {
-    // Estimate fee: we'll use all available UTXOs as inputs, plus outputs we're creating + 1 for change
-    const numInputs = vault.coins.length
-    const numOutputs = outputs.length + 1 // current outputs + 1 change output
-    const estimatedFee = estimateFee(numInputs, numOutputs)
-
-    // Calculate max amount: total balance minus fee
-    const maxAmount = Math.max(0, totalBalance - estimatedFee)
-
-    if (maxAmount <= 0) {
-      notify('error', 'Insufficient balance to cover transaction fee.')
-      return
-    }
-
-    // Update the satoshis field for this output
-    const newOutputs = [...outputs]
-    newOutputs[index] = { ...newOutputs[index], satoshis: String(maxAmount) }
-    setOutputs(newOutputs)
-
-    notify('info', `Set to max: ${maxAmount.toLocaleString()} sats (${totalBalance.toLocaleString()} - ~${estimatedFee.toLocaleString()} fee)`)
-  }, [vault.coins.length, outputs.length, totalBalance, outputs, notify])
 
   const coinTimestamp = useCallback(
     (coin: CoinRecord) => {
@@ -510,34 +462,17 @@ const OutgoingWizard: FC<OutgoingWizardProps> = ({ vault, onUpdate, notify }) =>
                   className="input"
                   autoComplete="off"
                 />
-                <div style={{ display: 'flex', gap: 8, alignItems: 'center' }}>
-                  <input
-                    type="text"
-                    inputMode="numeric"
-                    pattern="[0-9]*"
-                    placeholder="Satoshis"
-                    value={output.satoshis}
-                    onChange={(e) => handleOutputChange(index, 'satoshis', e.target.value)}
-                    className="input"
-                    autoComplete="off"
-                    maxLength={16}
-                    style={{ flex: 1 }}
-                  />
-                  <button
-                    onClick={() => handleSetMaxAmount(index)}
-                    className="btn-ghost"
-                    style={{
-                      padding: '10px 16px',
-                      fontSize: 13,
-                      fontWeight: 600,
-                      minWidth: 60,
-                      maxWidth: 60
-                    }}
-                    title="Set to maximum available balance minus estimated fee"
-                  >
-                    Max
-                  </button>
-                </div>
+                <input
+                  type="text"
+                  inputMode="numeric"
+                  pattern="[0-9]*"
+                  placeholder="Satoshis"
+                  value={output.satoshis}
+                  onChange={(e) => handleOutputChange(index, 'satoshis', e.target.value)}
+                  className="input"
+                  autoComplete="off"
+                  maxLength={16}
+                />
                 <input
                   placeholder="Memo (optional)"
                   value={output.memo}
