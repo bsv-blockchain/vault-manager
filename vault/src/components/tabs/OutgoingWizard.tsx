@@ -10,6 +10,8 @@ import {
 import { getTxFromStore } from '../../utils'
 import { useDialog } from '../dialogs/DialogProvider'
 import { Utils } from '@bsv/sdk'
+import QRScanner from '../common/QRScanner'
+import QRDisplay from '../common/QRDisplay'
 
 interface OutgoingWizardProps {
   vault: Vault
@@ -18,11 +20,14 @@ interface OutgoingWizardProps {
 }
 
 const COLORS = {
-  red: '#8b0000',
-  green: '#0a7b22',
-  blue: '#1e6bd6',
-  gray600: '#555',
-  border: '#ddd'
+  red: '#c45c5c',
+  green: '#5a9367',
+  blue: '#5d8cb8',
+  accent: '#c9a961',
+  gray600: '#6b7280',
+  border: '#3a3f49',
+  text: '#e4e6eb',
+  textSecondary: '#9da3ae'
 }
 
 const OutgoingWizard: FC<OutgoingWizardProps> = ({ vault, onUpdate, notify }) => {
@@ -45,6 +50,8 @@ const OutgoingWizard: FC<OutgoingWizardProps> = ({ vault, onUpdate, notify }) =>
   const [beefTxid, setBeefTxid] = useState<string | null>(null)
   const [rawTxHex, setRawTxHex] = useState<string | null>(null)
   const [isBuilding, setIsBuilding] = useState(false)
+  const [scanningForOutput, setScanningForOutput] = useState<number | null>(null)
+  const [showBeefQR, setShowBeefQR] = useState(false)
 
   // Handlers for the multi-output UI
   const handleOutputChange = (
@@ -78,6 +85,16 @@ const OutgoingWizard: FC<OutgoingWizardProps> = ({ vault, onUpdate, notify }) =>
     setBeefHex(null)
     setBeefTxid(null)
     setRawTxHex(null)
+    setScanningForOutput(null)
+    setShowBeefQR(false)
+  }
+
+  const handleQRScan = (index: number, data: string) => {
+    // Trim and validate the scanned data
+    const trimmedData = data.trim()
+    handleOutputChange(index, 'destinationAddressOrScript', trimmedData)
+    setScanningForOutput(null)
+    notify('success', 'Address scanned from QR code')
   }
 
   const totalOutputSats = useMemo(() => {
@@ -434,15 +451,35 @@ const OutgoingWizard: FC<OutgoingWizardProps> = ({ vault, onUpdate, notify }) =>
 
   return (
     <section className="section">
-      <h2 style={{ marginTop: 0 }}>Build Outgoing Transaction</h2>
+      <h2 style={{
+        marginTop: 0,
+        fontSize: 14,
+        fontWeight: 600,
+        letterSpacing: '0.08em',
+        textTransform: 'uppercase',
+        color: COLORS.textSecondary
+      }}>
+        Build Outgoing Transaction
+      </h2>
       <StepIndicator />
+
+      {scanningForOutput !== null && (
+        <QRScanner
+          onScan={(data) => handleQRScan(scanningForOutput, data)}
+          onError={(err) => {
+            notify('error', err)
+            setScanningForOutput(null)
+          }}
+          onClose={() => setScanningForOutput(null)}
+        />
+      )}
 
       {step === 1 && (
         <div>
-          <div style={{ marginBottom: 8, color: COLORS.gray600, fontSize: 12 }}>
+          <div style={{ marginBottom: 8, color: COLORS.gray600, fontSize: 12, lineHeight: 1.6 }}>
             Add one or more outputs for the transaction.
           </div>
-          <div style={{ display: 'grid', gap: 8 }}>
+          <div style={{ display: 'grid', gap: 12 }}>
             {outputs.map((output, index) => (
               <div
                 key={index}
@@ -450,18 +487,39 @@ const OutgoingWizard: FC<OutgoingWizardProps> = ({ vault, onUpdate, notify }) =>
                   display: 'grid',
                   gap: 8,
                   gridTemplateColumns: '1fr',
-                  alignItems: 'center'
+                  padding: 12,
+                  background: 'var(--color-bg-secondary)',
+                  border: '1px solid var(--color-border-secondary)',
+                  borderRadius: 6
                 }}
               >
-                <input
-                  placeholder="Address or Script Hex"
-                  value={output.destinationAddressOrScript}
-                  onChange={(e) =>
-                    handleOutputChange(index, 'destinationAddressOrScript', e.target.value)
-                  }
-                  className="input"
-                  autoComplete="off"
-                />
+                <div style={{
+                  fontSize: 11,
+                  fontWeight: 600,
+                  letterSpacing: '0.04em',
+                  textTransform: 'uppercase',
+                  color: COLORS.textSecondary
+                }}>
+                  Output {index + 1}
+                </div>
+                <div style={{ display: 'grid', gap: 8 }}>
+                  <input
+                    placeholder="Address or Script Hex"
+                    value={output.destinationAddressOrScript}
+                    onChange={(e) =>
+                      handleOutputChange(index, 'destinationAddressOrScript', e.target.value)
+                    }
+                    className="input"
+                    autoComplete="off"
+                  />
+                  <button
+                    onClick={() => setScanningForOutput(index)}
+                    className="btn-ghost"
+                    style={{ fontSize: 12 }}
+                  >
+                    📷 Scan Address QR
+                  </button>
+                </div>
                 <input
                   type="text"
                   inputMode="numeric"
@@ -484,19 +542,18 @@ const OutgoingWizard: FC<OutgoingWizardProps> = ({ vault, onUpdate, notify }) =>
                 <button
                   onClick={() => removeOutput(index)}
                   disabled={outputs.length <= 1}
-                  className="btn-ghost"
-                  style={btnRemoveStyle}
+                  className="btn-remove"
+                  style={{ width: '100%' }}
                 >
-                  &times;
+                  Remove Output
                 </button>
               </div>
             ))}
           </div>
-          <div style={{ marginTop: 10, display: 'grid', gap: 8, gridTemplateColumns: '1fr 1fr' }}>
+          <div style={{ marginTop: 12, display: 'grid', gap: 8, gridTemplateColumns: '1fr 1fr' }}>
             <button
               onClick={addOutput}
               className="btn-ghost"
-              style={{ background: COLORS.green, color: 'white' }}
             >
               + Add Output
             </button>
@@ -738,90 +795,159 @@ const OutgoingWizard: FC<OutgoingWizardProps> = ({ vault, onUpdate, notify }) =>
 
       {step === 5 && (
         <div>
-          <b>Result</b>
+          <h3 style={{
+            marginTop: 0,
+            fontSize: 14,
+            fontWeight: 600,
+            letterSpacing: '0.05em',
+            textTransform: 'uppercase',
+            color: COLORS.textSecondary
+          }}>
+            Transaction Result
+          </h3>
           {beefHex && beefTxid ? (
             <div
               style={{
                 border: `1px solid ${COLORS.border}`,
-                borderRadius: 12,
-                padding: 12,
+                borderRadius: 6,
+                padding: 16,
                 marginTop: 8,
                 display: 'grid',
-                gap: 12
+                gap: 16
               }}
             >
-              <p style={{ fontSize: 12, margin: 0, wordBreak: 'break-all' }}>
-                TXID: <code>{beefTxid}</code>
-              </p>
-
-              <div style={{ display: 'grid', gap: 6 }}>
-                <div style={{ fontWeight: 600 }}>
-                  Atomic BEEF (share with counterparty/offline signer)
-                </div>
-                <div
-                  style={{
-                    border: `1px solid ${COLORS.border}`,
-                    borderRadius: 8,
-                    padding: 8,
-                    fontFamily: 'monospace',
-                    fontSize: 12,
-                    maxHeight: 160,
-                    overflowY: 'auto',
-                    wordBreak: 'break-all',
-                    background: '#fafafa'
-                  }}
-                >
-                  {beefHex}
-                </div>
-                <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap' }}>
-                  <button onClick={() => handleCopyBeef()} className="btn-ghost" style={{ maxWidth: 180 }}>
-                    Copy Atomic BEEF
-                  </button>
-                  <button onClick={handleDownloadBeef} className="btn-ghost" style={{ maxWidth: 220 }}>
-                    Download Atomic BEEF (.txt)
-                  </button>
-                </div>
+              <div style={{
+                fontSize: 12,
+                fontFamily: '"SF Mono", "Monaco", monospace',
+                wordBreak: 'break-all',
+                background: 'var(--color-bg-primary)',
+                padding: 10,
+                borderRadius: 4,
+                border: '1px solid var(--color-border-secondary)'
+              }}>
+                <span style={{ color: COLORS.gray600 }}>TXID:</span>{' '}
+                <span style={{ color: COLORS.accent }}>{beefTxid}</span>
               </div>
 
-              <div style={{ display: 'grid', gap: 6 }}>
-                <div style={{ fontWeight: 600 }}>Raw Transaction Hex (for broadcasters)</div>
+              <div style={{ display: 'grid', gap: 10 }}>
+                <div style={{
+                  fontWeight: 600,
+                  fontSize: 13,
+                  letterSpacing: '0.03em',
+                  color: COLORS.text
+                }}>
+                  Atomic BEEF Transaction
+                </div>
+
+                {showBeefQR ? (
+                  <div style={{ display: 'grid', gap: 10 }}>
+                    <QRDisplay
+                      data={beefHex}
+                      size={350}
+                      label="Atomic BEEF QR"
+                      onError={(err) => notify('error', err)}
+                    />
+                    <button
+                      onClick={() => setShowBeefQR(false)}
+                      className="btn-ghost"
+                    >
+                      Hide QR Code
+                    </button>
+                  </div>
+                ) : (
+                  <>
+                    <div
+                      style={{
+                        border: `1px solid ${COLORS.border}`,
+                        borderRadius: 4,
+                        padding: 10,
+                        fontFamily: '"SF Mono", "Monaco", monospace',
+                        fontSize: 11,
+                        maxHeight: 160,
+                        overflowY: 'auto',
+                        wordBreak: 'break-all',
+                        background: 'var(--color-bg-primary)',
+                        color: COLORS.textSecondary
+                      }}
+                    >
+                      {beefHex}
+                    </div>
+                    <div style={{ display: 'grid', gap: 8, gridTemplateColumns: 'repeat(auto-fit, minmax(180px, 1fr))' }}>
+                      <button onClick={() => setShowBeefQR(true)} className="btn">
+                        Show as QR Code
+                      </button>
+                      <button onClick={() => handleCopyBeef()} className="btn-ghost">
+                        Copy to Clipboard
+                      </button>
+                      <button onClick={handleDownloadBeef} className="btn-ghost">
+                        Download (.txt)
+                      </button>
+                    </div>
+                  </>
+                )}
+              </div>
+
+              <div style={{ display: 'grid', gap: 10 }}>
+                <div style={{
+                  fontWeight: 600,
+                  fontSize: 13,
+                  letterSpacing: '0.03em',
+                  color: COLORS.text
+                }}>
+                  Raw Transaction Hex
+                </div>
                 {rawTxHex ? (
                   <>
                     <div
                       style={{
                         border: `1px solid ${COLORS.border}`,
-                        borderRadius: 8,
-                        padding: 8,
-                        fontFamily: 'monospace',
-                        fontSize: 12,
+                        borderRadius: 4,
+                        padding: 10,
+                        fontFamily: '"SF Mono", "Monaco", monospace',
+                        fontSize: 11,
                         maxHeight: 160,
                         overflowY: 'auto',
                         wordBreak: 'break-all',
-                        background: '#fafafa'
+                        background: 'var(--color-bg-primary)',
+                        color: COLORS.textSecondary
                       }}
                     >
                       {rawTxHex}
                     </div>
-                    <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap' }}>
-                      <button onClick={() => handleCopyRaw()} className="btn-ghost" style={{ maxWidth: 160 }}>
+                    <div style={{ display: 'grid', gap: 8, gridTemplateColumns: 'repeat(auto-fit, minmax(160px, 1fr))' }}>
+                      <button onClick={() => handleCopyRaw()} className="btn-ghost">
                         Copy Raw Hex
                       </button>
-                      <button onClick={handleDownloadRaw} className="btn-ghost" style={{ maxWidth: 200 }}>
-                        Download Raw Hex (.txt)
+                      <button onClick={handleDownloadRaw} className="btn-ghost">
+                        Download (.txt)
                       </button>
                     </div>
                   </>
                 ) : (
-                  <div style={{ fontSize: 12, color: COLORS.gray600 }}>
+                  <div style={{
+                    fontSize: 12,
+                    color: COLORS.gray600,
+                    fontStyle: 'italic',
+                    padding: 10,
+                    background: 'var(--color-bg-primary)',
+                    borderRadius: 4
+                  }}>
                     Raw hex export unavailable. Use the Atomic BEEF file for broadcasting.
                   </div>
                 )}
               </div>
 
-              <div style={{ fontSize: 12, color: COLORS.gray600 }}>
-                After distributing the Atomic BEEF to the broadcast operator, SAVE the vault to
-                persist the new state. Use your preferred broadcaster (WhatsOnChain, Merchant API,
-                etc.) with the raw hex above. Keep the BEEF copy for recovery.
+              <div style={{
+                fontSize: 12,
+                color: COLORS.gray600,
+                lineHeight: 1.6,
+                padding: 12,
+                background: 'rgba(201, 169, 97, 0.05)',
+                border: '1px solid var(--color-border-accent)',
+                borderRadius: 4
+              }}>
+                <strong style={{ color: COLORS.accent }}>Next Steps:</strong> Share the Atomic BEEF (via QR or file) with your broadcast operator.
+                Then <strong>SAVE the vault</strong> to persist changes. Use your preferred broadcaster (WhatsOnChain, ARC, etc.) with the raw hex. Keep the BEEF for recovery.
               </div>
             </div>
           ) : (

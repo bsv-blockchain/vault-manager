@@ -2,6 +2,7 @@ import React, { FC, useState } from 'react'
 import Vault from '../../Vault'
 import { Notification } from '../../types'
 import { useDialog } from '../dialogs/DialogProvider'
+import QRDisplay from '../common/QRDisplay'
 
 interface KeyManagerProps {
   vault: Vault
@@ -10,9 +11,11 @@ interface KeyManagerProps {
 }
 
 const COLORS = {
-  green: '#0a7b22',
-  gray600: '#555',
-  border: '#ddd'
+  green: '#5a9367',
+  gray600: '#6b7280',
+  border: '#3a3f49',
+  text: '#e4e6eb',
+  textSecondary: '#9da3ae'
 }
 
 const KeyManager: FC<KeyManagerProps> = ({ vault, onUpdate, notify }) => {
@@ -21,6 +24,7 @@ const KeyManager: FC<KeyManagerProps> = ({ vault, onUpdate, notify }) => {
   const [editingSerial, setEditingSerial] = useState<string | null>(null)
   const [memoDraft, setMemoDraft] = useState('')
   const [savingMemo, setSavingMemo] = useState(false)
+  const [showQRSerial, setShowQRSerial] = useState<string | null>(null)
 
   const beginEdit = (serial: string, currentMemo: string) => {
     setEditingSerial(serial)
@@ -49,8 +53,22 @@ const KeyManager: FC<KeyManagerProps> = ({ vault, onUpdate, notify }) => {
 
   return (
     <section className="section">
-      <h2 style={{ marginTop: 0 }}>Keys ({vault.keys.length})</h2>
-      <p style={{ fontSize: 12, color: COLORS.gray600, margin: '0 0 8px 0' }}>
+      <h2 style={{
+        marginTop: 0,
+        fontSize: 14,
+        fontWeight: 600,
+        letterSpacing: '0.08em',
+        textTransform: 'uppercase',
+        color: COLORS.textSecondary
+      }}>
+        Keys ({vault.keys.length})
+      </h2>
+      <p style={{
+        fontSize: 12,
+        color: COLORS.gray600,
+        margin: '0 0 12px 0',
+        lineHeight: 1.6
+      }}>
         Generate as many fresh keys as you need. Deposit slips bundle the address, script, and
         metadata you can hand to counterparties.
       </p>
@@ -94,7 +112,29 @@ const KeyManager: FC<KeyManagerProps> = ({ vault, onUpdate, notify }) => {
                 {k.public.toAddress()}
               </div>
             </div>
+            {showQRSerial === k.serial && (
+              <div style={{ marginTop: 12 }}>
+                <QRDisplay
+                  data={k.public.toAddress()}
+                  size={280}
+                  label={`Address QR - ${k.serial}`}
+                />
+                <button
+                  onClick={() => setShowQRSerial(null)}
+                  className="btn-ghost"
+                  style={{ width: '100%', marginTop: 12 }}
+                >
+                  Hide QR Code
+                </button>
+              </div>
+            )}
             <div style={{ display: 'grid', gap: 8, gridTemplateColumns: '1fr 1fr' }}>
+              <button
+                onClick={() => setShowQRSerial(showQRSerial === k.serial ? null : k.serial)}
+                className="btn"
+              >
+                {showQRSerial === k.serial ? 'Hide QR' : 'Show QR Code'}
+              </button>
               <button
                 onClick={async () => {
                   await vault.downloadDepositSlipTxt(k.serial)
@@ -116,7 +156,6 @@ const KeyManager: FC<KeyManagerProps> = ({ vault, onUpdate, notify }) => {
                   )
                 }}
                 className="btn-ghost"
-                style={{ background: hoverMap[k.serial] ? '#555' : '#777' }}
               >
                 Copy Address
               </button>

@@ -331,7 +331,7 @@ function AppInner() {
               WebkitTextFillColor: 'transparent',
               backgroundClip: 'text'
             }}>
-              BSV VAULT MANAGER SUITE
+              VAULT MANAGER
             </h1>
             <section className="section">
               <div style={{ marginBottom: 16 }}>
@@ -611,7 +611,7 @@ function AppInner() {
                 WebkitTextFillColor: 'transparent',
                 backgroundClip: 'text'
               }}>
-                BSV VAULT MANAGER SUITE
+                VAULT MANAGER
               </h1>
               <div style={{
                 color: 'var(--color-text-secondary)',
