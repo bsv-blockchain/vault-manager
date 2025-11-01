@@ -9,25 +9,41 @@ interface LogsPanelProps {
 }
 
 const COLORS = {
-  border: '#ddd'
+  border: '#3a3f49',
+  logBg: '#0f1216',
+  logText: '#9da3ae',
+  timestamp: '#6b7280'
 }
 
 const LogViewer: FC<{ log: AuditEvent[] }> = ({ log }) => (
   <div
     style={{
-      height: 200,
+      height: 220,
       overflowY: 'auto',
       border: `1px solid ${COLORS.border}`,
-      borderRadius: 8,
-      padding: 8,
-      background: '#fcfcfc',
-      fontFamily: 'monospace',
-      fontSize: 12
+      borderRadius: 4,
+      padding: 12,
+      background: COLORS.logBg,
+      fontFamily: '"SF Mono", "Monaco", "Cascadia Code", "Roboto Mono", monospace',
+      fontSize: 12,
+      lineHeight: 1.6,
+      boxShadow: 'inset 0 1px 3px rgba(0, 0, 0, 0.4)'
     }}
   >
     {[...log].reverse().map((e) => (
-      <div key={e.at + e.event} style={{ wordBreak: 'break-all' }}>
-        {`[${new Date(e.at).toISOString()}] ${e.event}${e.data ? `: ${e.data}` : ''}`}
+      <div
+        key={e.at + e.event}
+        style={{
+          wordBreak: 'break-all',
+          color: COLORS.logText,
+          marginBottom: 4
+        }}
+      >
+        <span style={{ color: COLORS.timestamp, fontWeight: 500 }}>
+          [{new Date(e.at).toISOString()}]
+        </span>{' '}
+        {e.event}
+        {e.data ? <span style={{ color: '#c9a961' }}>: {e.data}</span> : ''}
       </div>
     ))}
   </div>

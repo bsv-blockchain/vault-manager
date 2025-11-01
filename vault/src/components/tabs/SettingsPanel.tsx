@@ -20,8 +20,10 @@ interface SettingsPanelProps {
 }
 
 const COLORS = {
-  gray600: '#555',
-  border: '#ddd'
+  gray600: '#6b7280',
+  border: '#3a3f49',
+  label: '#9da3ae',
+  value: '#e4e6eb'
 }
 
 const SettingsPanel: FC<SettingsPanelProps> = ({
@@ -108,11 +110,27 @@ const SettingsPanel: FC<SettingsPanelProps> = ({
 
   return (
     <section className="section">
-      <h2 style={{ marginTop: 0 }}>Settings</h2>
+      <h2 style={{
+        marginTop: 0,
+        fontSize: 14,
+        fontWeight: 600,
+        letterSpacing: '0.08em',
+        textTransform: 'uppercase',
+        color: '#9da3ae'
+      }}>
+        Settings
+      </h2>
       <div style={{ display: 'grid', gridTemplateColumns: '1fr', gap: 16 }}>
         <div style={{ display: 'grid', gridTemplateColumns: '1fr', gap: 12 }}>
           <div>
-            <div style={{ fontSize: 12, color: COLORS.gray600, marginBottom: 4 }}>
+            <div style={{
+              fontSize: 11,
+              color: COLORS.gray600,
+              marginBottom: 6,
+              letterSpacing: '0.04em',
+              textTransform: 'uppercase',
+              fontWeight: 600
+            }}>
               Vault Display Name
             </div>
             <input
@@ -124,45 +142,94 @@ const SettingsPanel: FC<SettingsPanelProps> = ({
             />
           </div>
 
-          <label style={{ display: 'flex', gap: 8, alignItems: 'center' }}>
+          <label style={{
+            display: 'flex',
+            gap: 10,
+            alignItems: 'center',
+            cursor: 'pointer',
+            padding: '8px 0'
+          }}>
             <input
               type="checkbox"
               checked={incoming}
               onChange={(e) => setIncoming(e.target.checked)}
             />
-            Require attestation for incoming UTXOs
+            <span style={{ fontSize: 13, letterSpacing: '0.01em' }}>
+              Require attestation for incoming UTXOs
+            </span>
           </label>
-          <div style={{ fontSize: 12, color: COLORS.gray600, marginLeft: 26 }}>
+          <div style={{
+            fontSize: 12,
+            color: COLORS.gray600,
+            marginLeft: 28,
+            lineHeight: 1.5,
+            marginTop: -4
+          }}>
             When enabled, new incoming UTXOs pause for explicit operator confirmation before being
             admitted.
           </div>
-          <label style={{ display: 'flex', gap: 8, alignItems: 'center' }}>
+          <label style={{
+            display: 'flex',
+            gap: 10,
+            alignItems: 'center',
+            cursor: 'pointer',
+            padding: '8px 0'
+          }}>
             <input
               type="checkbox"
               checked={outgoing}
               onChange={(e) => setOutgoing(e.target.checked)}
             />
-            Require attestation for outgoing UTXOs
+            <span style={{ fontSize: 13, letterSpacing: '0.01em' }}>
+              Require attestation for outgoing UTXOs
+            </span>
           </label>
-          <div style={{ fontSize: 12, color: COLORS.gray600, marginLeft: 26 }}>
+          <div style={{
+            fontSize: 12,
+            color: COLORS.gray600,
+            marginLeft: 28,
+            lineHeight: 1.5,
+            marginTop: -4
+          }}>
             Adds a per-input confirmation during signing so the operator attests each UTXO was
             verified independently.
           </div>
-          <label style={{ display: 'flex', gap: 8, alignItems: 'center' }}>
+          <label style={{
+            display: 'flex',
+            gap: 10,
+            alignItems: 'center',
+            cursor: 'pointer',
+            padding: '8px 0'
+          }}>
             <input
               type="checkbox"
               checked={useUserEntropy}
               onChange={(e) => setUseUserEntropy(e.target.checked)}
             />
-            Require user-provided entropy for randomness (keys & salts)
+            <span style={{ fontSize: 13, letterSpacing: '0.01em' }}>
+              Require user-provided entropy for randomness (keys & salts)
+            </span>
           </label>
-          <div style={{ fontSize: 12, color: COLORS.gray600, marginLeft: 26 }}>
+          <div style={{
+            fontSize: 12,
+            color: COLORS.gray600,
+            marginLeft: 28,
+            lineHeight: 1.5,
+            marginTop: -4
+          }}>
             Collect additional keyboard/mouse noise when randomness is needed. Useful on devices
             with questionable RNG.
           </div>
 
           <div>
-            <div style={{ fontSize: 12, color: COLORS.gray600 }}>
+            <div style={{
+              fontSize: 11,
+              color: COLORS.gray600,
+              marginBottom: 6,
+              letterSpacing: '0.04em',
+              textTransform: 'uppercase',
+              fontWeight: 600
+            }}>
               Persist headers older than N blocks
             </div>
             <input
@@ -177,7 +244,14 @@ const SettingsPanel: FC<SettingsPanelProps> = ({
             />
           </div>
           <div>
-            <div style={{ fontSize: 12, color: COLORS.gray600 }}>
+            <div style={{
+              fontSize: 11,
+              color: COLORS.gray600,
+              marginBottom: 6,
+              letterSpacing: '0.04em',
+              textTransform: 'uppercase',
+              fontWeight: 600
+            }}>
               Re-verify recent headers after (seconds)
             </div>
             <input
@@ -192,7 +266,14 @@ const SettingsPanel: FC<SettingsPanelProps> = ({
             />
           </div>
           <div>
-            <div style={{ fontSize: 12, color: COLORS.gray600 }}>
+            <div style={{
+              fontSize: 11,
+              color: COLORS.gray600,
+              marginBottom: 6,
+              letterSpacing: '0.04em',
+              textTransform: 'uppercase',
+              fontWeight: 600
+            }}>
               Re-verify current block height after (seconds)
             </div>
             <input
@@ -226,7 +307,15 @@ const SettingsPanel: FC<SettingsPanelProps> = ({
               gap: 8
             }}
           >
-            <div style={{ fontWeight: 600 }}>File Integrity Snapshot</div>
+            <div style={{
+              fontWeight: 600,
+              fontSize: 13,
+              letterSpacing: '0.05em',
+              textTransform: 'uppercase',
+              color: COLORS.label
+            }}>
+              File Integrity Snapshot
+            </div>
             {expectedHash ? (
               <div style={{ fontSize: 13, wordBreak: 'break-all' }}>
                 <b>Last approved hash:</b> <code>{expectedHash.fileHash}</code> (saved{' '}
@@ -263,7 +352,15 @@ const SettingsPanel: FC<SettingsPanelProps> = ({
             gap: 8
           }}
         >
-          <div style={{ fontWeight: 600 }}>Automatic Backups</div>
+          <div style={{
+            fontWeight: 600,
+            fontSize: 13,
+            letterSpacing: '0.05em',
+            textTransform: 'uppercase',
+            color: COLORS.label
+          }}>
+            Automatic Backups
+          </div>
           {plainHash ? (
             backups.length ? (
               backups.map((b) => (

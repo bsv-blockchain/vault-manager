@@ -299,8 +299,14 @@ function AppInner() {
   if (isLoading) {
     return (
       <div className="app-shell">
-        <div className="container" style={{ textAlign: 'center' }}>
-          Loading Vault...
+        <div className="container" style={{
+          textAlign: 'center',
+          fontSize: 14,
+          color: 'var(--color-text-secondary)',
+          letterSpacing: '0.03em',
+          paddingTop: 40
+        }}>
+          LOADING VAULT...
         </div>
       </div>
     )
@@ -311,13 +317,47 @@ function AppInner() {
       <div className="app-shell">
         <div className="container">
           {notification && <NotificationBanner notification={notification} onDismiss={() => setNotification(null)} />}
-          <div className="panel" style={{ padding: 16, display: 'grid', gap: 16 }}>
-            <h1 style={{ marginTop: 0 }}>BSV Vault Manager Suite</h1>
+          <div className="panel" style={{ padding: 24, display: 'grid', gap: 20 }}>
+            <h1 style={{
+              marginTop: 0,
+              fontSize: 22,
+              fontWeight: 300,
+              letterSpacing: '0.02em',
+              color: 'var(--color-text-primary)',
+              borderBottom: '1px solid var(--color-border-accent)',
+              paddingBottom: 16,
+              background: 'linear-gradient(90deg, var(--color-accent-gold) 0%, var(--color-text-primary) 40%)',
+              WebkitBackgroundClip: 'text',
+              WebkitTextFillColor: 'transparent',
+              backgroundClip: 'text'
+            }}>
+              BSV VAULT MANAGER SUITE
+            </h1>
             <section className="section">
-              <div>
-                <h2 style={{ margin: '0 0 4px 0', fontSize: 18 }}>Open an Existing Vault</h2>
-                <p style={{ margin: 0, fontSize: 13, color: 'var(--gray-600)' }}>
-                  Select your saved <code>.vaultfile</code>. Integrity and backups will be checked automatically.
+              <div style={{ marginBottom: 16 }}>
+                <h2 style={{
+                  margin: '0 0 8px 0',
+                  fontSize: 14,
+                  fontWeight: 600,
+                  letterSpacing: '0.06em',
+                  textTransform: 'uppercase',
+                  color: 'var(--color-text-secondary)'
+                }}>
+                  Open an Existing Vault
+                </h2>
+                <p style={{
+                  margin: 0,
+                  fontSize: 13,
+                  color: 'var(--color-text-tertiary)',
+                  lineHeight: 1.6
+                }}>
+                  Select your saved <code style={{
+                    background: 'var(--color-bg-primary)',
+                    padding: '2px 6px',
+                    borderRadius: 3,
+                    fontSize: 12,
+                    color: 'var(--color-accent-gold)'
+                  }}>.vaultfile</code>. Integrity and backups will be checked automatically.
                 </p>
               </div>
               <input
@@ -332,12 +372,28 @@ function AppInner() {
               <NewVaultForm onCancel={() => setShowCreateForm(false)} onSubmit={handleCreateVault} submitting={isLoading} />
             ) : (
               <section className="section">
-                <h2 style={{ marginTop: 0 }}>Create a New Vault</h2>
-                <p style={{ marginTop: 0, fontSize: 13, color: 'var(--gray-600)' }}>
+                <h2 style={{
+                  marginTop: 0,
+                  fontSize: 14,
+                  fontWeight: 600,
+                  letterSpacing: '0.06em',
+                  textTransform: 'uppercase',
+                  color: 'var(--color-text-secondary)',
+                  marginBottom: 10
+                }}>
+                  Create a New Vault
+                </h2>
+                <p style={{
+                  marginTop: 0,
+                  fontSize: 13,
+                  color: 'var(--color-text-tertiary)',
+                  lineHeight: 1.6,
+                  marginBottom: 16
+                }}>
                   Configure the core policies, password, and block height in a single step. You can adjust advanced settings
-                  later in <b>Settings</b>.
+                  later in <strong style={{ color: 'var(--color-accent-gold)' }}>Settings</strong>.
                 </p>
-                <button onClick={() => setShowCreateForm(true)} className="btn btn-primary">
+                <button onClick={() => setShowCreateForm(true)} className="btn">
                   Launch Setup Form
                 </button>
               </section>
@@ -345,10 +401,12 @@ function AppInner() {
 
             <div
               style={{
-                fontSize: 12,
-                color: 'var(--gray-600)',
-                borderTop: '1px solid var(--border)',
-                paddingTop: 12
+                fontSize: 11,
+                color: 'var(--color-text-muted)',
+                borderTop: '1px solid var(--color-border-primary)',
+                paddingTop: 14,
+                lineHeight: 1.6,
+                fontStyle: 'italic'
               }}
             >
               This offline tool ships without warranty. Keep copies of your vault file on secure, redundant media. The
@@ -379,34 +437,93 @@ function AppInner() {
           <div
             className="panel"
             style={{
-              marginBottom: 12,
-              borderColor: loadedFileMeta.mismatch ? '#d9534f' : 'var(--border)',
-              background: loadedFileMeta.mismatch ? '#fff6f6' : '#f9fbff',
+              marginBottom: 14,
+              borderColor: loadedFileMeta.mismatch ? 'var(--color-error)' : 'var(--color-border-accent)',
+              background: loadedFileMeta.mismatch
+                ? 'rgba(196, 92, 92, 0.1)'
+                : 'rgba(201, 169, 97, 0.05)',
               display: 'grid',
-              gap: 6
+              gap: 10,
+              boxShadow: loadedFileMeta.mismatch
+                ? '0 2px 12px rgba(196, 92, 92, 0.3)'
+                : '0 2px 12px rgba(201, 169, 97, 0.15)'
             }}
           >
-            <div style={{ fontWeight: 600, color: loadedFileMeta.mismatch ? '#a12121' : 'var(--gray-700)' }}>
-              Loaded file details
+            <div style={{
+              fontWeight: 600,
+              fontSize: 13,
+              letterSpacing: '0.05em',
+              textTransform: 'uppercase',
+              color: loadedFileMeta.mismatch ? 'var(--color-error)' : 'var(--color-accent-gold)'
+            }}>
+              Loaded File Details
             </div>
-            <div style={{ fontSize: 13, wordBreak: 'break-all' }}>
-              <b>File:</b> {loadedFileMeta.fileName || 'Unknown (.vaultfile)'} &nbsp;·&nbsp;
-              <b>Loaded at:</b> {new Date(loadedFileMeta.loadedAt).toLocaleString()}
+            <div style={{
+              fontSize: 13,
+              wordBreak: 'break-all',
+              color: 'var(--color-text-secondary)',
+              lineHeight: 1.6
+            }}>
+              <span style={{ color: 'var(--color-text-tertiary)' }}>File:</span>{' '}
+              <span style={{ color: 'var(--color-text-primary)' }}>
+                {loadedFileMeta.fileName || 'Unknown (.vaultfile)'}
+              </span>
+              <span style={{ margin: '0 8px', color: 'var(--color-border-secondary)' }}>•</span>
+              <span style={{ color: 'var(--color-text-tertiary)' }}>Loaded at:</span>{' '}
+              {new Date(loadedFileMeta.loadedAt).toLocaleString()}
             </div>
-            <div style={{ fontSize: 13, wordBreak: 'break-all' }}>
-              <b>SHA-256:</b> <code>{loadedFileMeta.fileHash}</code>
+            <div style={{
+              fontSize: 12,
+              wordBreak: 'break-all',
+              fontFamily: '"SF Mono", "Monaco", monospace',
+              background: 'var(--color-bg-primary)',
+              padding: 10,
+              borderRadius: 4,
+              border: '1px solid var(--color-border-secondary)'
+            }}>
+              <span style={{ color: 'var(--color-text-tertiary)' }}>SHA-256:</span>{' '}
+              <span style={{ color: 'var(--color-accent-gold)' }}>{loadedFileMeta.fileHash}</span>
             </div>
             {loadedFileMeta.expectedHash && (
-              <div style={{ fontSize: 13, wordBreak: 'break-all' }}>
-                <b>Last saved hash on this device:</b> <code>{loadedFileMeta.expectedHash}</code>
+              <div style={{
+                fontSize: 12,
+                wordBreak: 'break-all',
+                fontFamily: '"SF Mono", "Monaco", monospace',
+                background: 'var(--color-bg-primary)',
+                padding: 10,
+                borderRadius: 4,
+                border: '1px solid var(--color-border-secondary)'
+              }}>
+                <span style={{ color: 'var(--color-text-tertiary)' }}>Last saved:</span>{' '}
+                <span style={{ color: 'var(--color-text-secondary)' }}>{loadedFileMeta.expectedHash}</span>
                 {loadedFileMeta.mismatch ? (
-                  <span style={{ color: '#a12121', fontWeight: 600 }}> — mismatch detected</span>
+                  <div style={{
+                    color: 'var(--color-error)',
+                    fontWeight: 600,
+                    marginTop: 6,
+                    fontSize: 11,
+                    letterSpacing: '0.03em'
+                  }}>
+                    ⚠ MISMATCH DETECTED
+                  </div>
                 ) : (
-                  <span style={{ color: 'var(--green)' }}> — matches</span>
+                  <div style={{
+                    color: 'var(--color-success)',
+                    fontWeight: 600,
+                    marginTop: 6,
+                    fontSize: 11
+                  }}>
+                    ✓ VERIFIED
+                  </div>
                 )}
               </div>
             )}
-            <div style={{ fontSize: 12, color: 'var(--gray-600)' }}>
+            <div style={{
+              fontSize: 12,
+              color: 'var(--color-text-tertiary)',
+              lineHeight: 1.6,
+              fontStyle: 'italic'
+            }}>
               {loadedFileMeta.mismatch
                 ? 'Hashes differ from the last approved version. Pause operations, investigate the discrepancy, and recover from an automatic backup in Settings.'
                 : 'Hash stored for quick comparison next time you load this file. You can export verified backups from Settings.'}
@@ -414,7 +531,7 @@ function AppInner() {
             <div>
               <button
                 onClick={() => navigator.clipboard.writeText(loadedFileMeta.fileHash)}
-                className="btn btn-ghost"
+                className="btn-ghost"
                 style={{ width: '100%', maxWidth: 220 }}
               >
                 Copy SHA-256 Hash
@@ -452,16 +569,20 @@ function AppInner() {
           />
         )}
 
-        <div className="panel" style={{ padding: 16, marginBottom: 12 }}>
+        <div className="panel" style={{ padding: 20, marginBottom: 14 }}>
           {dirty && (
             <div
               style={{
-                background: 'var(--red)',
-                color: 'white',
-                padding: 12,
-                marginBottom: 12,
-                fontWeight: 700,
-                borderRadius: 8
+                background: 'rgba(196, 92, 92, 0.15)',
+                border: '1px solid var(--color-error)',
+                color: 'var(--color-error)',
+                padding: 14,
+                marginBottom: 16,
+                fontWeight: 600,
+                borderRadius: 4,
+                fontSize: 13,
+                letterSpacing: '0.03em',
+                boxShadow: '0 2px 8px rgba(196, 92, 92, 0.3)'
               }}
             >
               UNSAVED CHANGES — Save the new vault file, verify its integrity, and then securely delete the old version.
@@ -470,28 +591,50 @@ function AppInner() {
 
           <header
             style={{
-              borderBottom: '1px solid var(--border)',
-              paddingBottom: 12,
-              marginBottom: 12,
+              borderBottom: '1px solid var(--color-border-accent)',
+              paddingBottom: 16,
+              marginBottom: 16,
               display: 'grid',
               gridTemplateColumns: '1fr',
-              gap: 8
+              gap: 10
             }}
           >
             <div>
-              <h1 style={{ margin: 0, fontSize: 22 }}>BSV Vault Manager Suite</h1>
-              <div style={{ color: 'var(--gray-600)', marginTop: 4 }}>
-                Vault: <b>{vault.vaultName}</b> (rev {vault.vaultRevision})
+              <h1 style={{
+                margin: 0,
+                fontSize: 20,
+                fontWeight: 300,
+                letterSpacing: '0.04em',
+                color: 'var(--color-text-primary)',
+                background: 'linear-gradient(90deg, var(--color-accent-gold) 0%, var(--color-text-primary) 50%)',
+                WebkitBackgroundClip: 'text',
+                WebkitTextFillColor: 'transparent',
+                backgroundClip: 'text'
+              }}>
+                BSV VAULT MANAGER SUITE
+              </h1>
+              <div style={{
+                color: 'var(--color-text-secondary)',
+                marginTop: 8,
+                fontSize: 13,
+                letterSpacing: '0.01em'
+              }}>
+                Vault: <span style={{
+                  color: 'var(--color-accent-gold)',
+                  fontWeight: 600
+                }}>{vault.vaultName}</span>
+                <span style={{ margin: '0 8px', color: 'var(--color-border-secondary)' }}>•</span>
+                <span style={{ color: 'var(--color-text-tertiary)' }}>rev {vault.vaultRevision}</span>
               </div>
             </div>
-            <div style={{ display: 'grid', gap: 8, gridTemplateColumns: '1fr 1fr', alignItems: 'center' }}>
+            <div style={{ display: 'grid', gap: 10, gridTemplateColumns: '1fr 1fr', alignItems: 'center' }}>
               <input
                 style={{ gridColumn: 'span 2' }}
                 type="file"
                 accept=".vaultfile,application/octet-stream"
                 onChange={e => e.target.files && onOpenVault(e.target.files[0])}
               />
-              <button onClick={onSaveVault} className="btn btn-primary" style={{ gridColumn: 'span 2' }}>
+              <button onClick={onSaveVault} className="btn" style={{ gridColumn: 'span 2' }}>
                 Save Vault
               </button>
             </div>

@@ -9,18 +9,40 @@ interface DashboardPanelProps {
 }
 
 const COLORS = {
-  green: '#0a7b22',
-  red: '#8b0000',
-  border: '#ddd'
+  green: '#5a9367',
+  red: '#c45c5c',
+  border: '#3a3f49',
+  label: '#6b7280',
+  value: '#e4e6eb'
 }
 
 const DashboardPanel: FC<DashboardPanelProps> = ({ vault, balance, triggerRerender }) => {
   return (
     <section className="section">
-      <h2 style={{ marginTop: 0 }}>Dashboard</h2>
-      <div>
-        Total balance: <b>{balance.toLocaleString()}</b> sats (
-        <b>{(balance / 100000000).toFixed(8)}</b> BSV)
+      <h2 style={{
+        marginTop: 0,
+        fontSize: 14,
+        fontWeight: 600,
+        letterSpacing: '0.08em',
+        textTransform: 'uppercase',
+        color: '#9da3ae'
+      }}>
+        Dashboard
+      </h2>
+      <div style={{
+        fontSize: 15,
+        padding: '12px 0',
+        borderBottom: `1px solid ${COLORS.border}`,
+        marginBottom: 16
+      }}>
+        <span style={{ color: COLORS.label, fontSize: 13, letterSpacing: '0.02em' }}>
+          TOTAL BALANCE
+        </span>
+        <div style={{ marginTop: 6, fontSize: 18, fontWeight: 600, color: COLORS.value }}>
+          {balance.toLocaleString()} <span style={{ fontSize: 14, color: COLORS.label }}>sats</span>
+          <span style={{ margin: '0 8px', color: COLORS.border }}>•</span>
+          {(balance / 100000000).toFixed(8)} <span style={{ fontSize: 14, color: COLORS.label }}>BSV</span>
+        </div>
       </div>
       <div
         style={{
@@ -31,8 +53,26 @@ const DashboardPanel: FC<DashboardPanelProps> = ({ vault, balance, triggerRerend
         }}
       >
         <div style={{ flex: 1, minWidth: 0 }}>
-          <h3>Current UTXOs ({vault.coins.length})</h3>
-          {vault.coins.length === 0 && <div>No spendable coins</div>}
+          <h3 style={{
+            fontSize: 13,
+            fontWeight: 600,
+            letterSpacing: '0.05em',
+            textTransform: 'uppercase',
+            color: '#9da3ae',
+            marginBottom: 12
+          }}>
+            Current UTXOs ({vault.coins.length})
+          </h3>
+          {vault.coins.length === 0 && (
+            <div style={{
+              color: COLORS.label,
+              fontSize: 13,
+              fontStyle: 'italic',
+              padding: '16px 0'
+            }}>
+              No spendable coins
+            </div>
+          )}
           {vault.coins.map((c) => {
             const id = `${c.txid}:${c.outputIndex}`
             let sats = 0
@@ -45,40 +85,97 @@ const DashboardPanel: FC<DashboardPanelProps> = ({ vault, balance, triggerRerend
                 key={id}
                 style={{
                   borderTop: `1px solid ${COLORS.border}`,
-                  padding: '8px 0',
-                  fontSize: '12px',
+                  padding: '12px 0',
+                  fontSize: 12,
                   wordBreak: 'break-all'
                 }}
               >
-                <div>
-                  <b>{id}</b> — {sats.toLocaleString()} sats (
-                  <b>{(sats / 100000000).toFixed(8)}</b> BSV)
+                <div style={{
+                  fontFamily: '"SF Mono", "Monaco", monospace',
+                  color: COLORS.value,
+                  marginBottom: 6,
+                  fontSize: 11
+                }}>
+                  {id}
                 </div>
-                {c.memo && <div>Memo: {c.memo}</div>}
+                <div style={{ color: COLORS.label, fontSize: 13 }}>
+                  {sats.toLocaleString()} sats
+                  <span style={{ margin: '0 6px', color: COLORS.border }}>•</span>
+                  <span style={{ color: COLORS.value, fontWeight: 600 }}>
+                    {(sats / 100000000).toFixed(8)}
+                  </span> BSV
+                </div>
+                {c.memo && (
+                  <div style={{
+                    marginTop: 6,
+                    color: '#c9a961',
+                    fontSize: 12,
+                    fontStyle: 'italic'
+                  }}>
+                    {c.memo}
+                  </div>
+                )}
               </div>
             )
           })}
         </div>
         <div style={{ flex: 1, minWidth: 0 }}>
-          <h3>Transaction Log ({vault.transactionLog.length})</h3>
+          <h3 style={{
+            fontSize: 13,
+            fontWeight: 600,
+            letterSpacing: '0.05em',
+            textTransform: 'uppercase',
+            color: '#9da3ae',
+            marginBottom: 12
+          }}>
+            Transaction Log ({vault.transactionLog.length})
+          </h3>
           {[...vault.transactionLog].reverse().map((t) => (
             <div
               key={t.at + t.txid}
               style={{
                 borderTop: `1px solid ${COLORS.border}`,
-                padding: '8px 0',
-                fontSize: '12px',
+                padding: '12px 0',
+                fontSize: 12,
                 wordBreak: 'break-all'
               }}
             >
-              <div>
-                <b>{t.txid}</b>
+              <div style={{
+                fontFamily: '"SF Mono", "Monaco", monospace',
+                color: COLORS.value,
+                marginBottom: 6,
+                fontSize: 11
+              }}>
+                {t.txid}
               </div>
-              {t.memo && <div>Memo: {t.memo}</div>}
-              <div style={{ color: t.net >= 0 ? COLORS.green : COLORS.red }}>
-                Net: {t.net.toLocaleString()} sats (<b>{(t.net / 100000000).toFixed(8)}</b> BSV)
+              {t.memo && (
+                <div style={{
+                  marginBottom: 6,
+                  color: '#c9a961',
+                  fontSize: 12,
+                  fontStyle: 'italic'
+                }}>
+                  {t.memo}
+                </div>
+              )}
+              <div style={{
+                color: t.net >= 0 ? COLORS.green : COLORS.red,
+                fontSize: 13,
+                fontWeight: 600,
+                marginBottom: 8
+              }}>
+                {t.net >= 0 ? '+' : ''}{t.net.toLocaleString()} sats
+                <span style={{ margin: '0 6px', color: COLORS.border }}>•</span>
+                {t.net >= 0 ? '+' : ''}{(t.net / 100000000).toFixed(8)} BSV
               </div>
-              <label style={{ display: 'inline-flex', gap: 8, alignItems: 'center', marginTop: 4 }}>
+              <label style={{
+                display: 'inline-flex',
+                gap: 10,
+                alignItems: 'center',
+                cursor: 'pointer',
+                fontSize: 12,
+                color: COLORS.label
+              }}>
                 <input
                   type="checkbox"
                   checked={t.processed}
@@ -87,7 +184,7 @@ const DashboardPanel: FC<DashboardPanelProps> = ({ vault, balance, triggerRerend
                     triggerRerender()
                   }}
                 />
-                Mark processed
+                <span style={{ letterSpacing: '0.02em' }}>MARK PROCESSED</span>
               </label>
             </div>
           ))}
