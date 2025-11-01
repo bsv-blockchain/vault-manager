@@ -96,7 +96,7 @@ const LogsPanel: FC<LogsPanelProps> = ({ vault, onUpdate }) => {
               gap: 8
             }}
           >
-            <h3 style={{ margin: 0 }}>Session Log (Ephemeral)</h3>
+            <h3 style={{ margin: 0 }}>Session Log (Temporary)</h3>
             <button onClick={() => vault.exportSessionLog()} className="btn-ghost">
               Download
             </button>

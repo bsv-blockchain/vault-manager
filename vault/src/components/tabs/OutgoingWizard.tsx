@@ -434,7 +434,7 @@ const OutgoingWizard: FC<OutgoingWizardProps> = ({ vault, onUpdate, notify }) =>
 
   return (
     <section className="section">
-      <h2 style={{ marginTop: 0 }}>Build Outgoing Transaction (Wizard)</h2>
+      <h2 style={{ marginTop: 0 }}>Build Outgoing Transaction</h2>
       <StepIndicator />
 
       {step === 1 && (
