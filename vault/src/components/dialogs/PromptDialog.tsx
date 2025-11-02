@@ -2,8 +2,9 @@ import React, { FC, useState, useEffect, useMemo } from 'react'
 import Modal from './Modal'
 
 const COLORS = {
-  red: '#8b0000',
-  gray600: '#555'
+  red: '#c45c5c',
+  gray600: '#6b7280',
+  textSecondary: '#9da3ae'
 }
 
 export interface PromptDialogRequest {
@@ -50,9 +51,17 @@ const PromptDialog: FC<PromptDialogProps> = ({ req, onResolve }) => {
   const randomName = useMemo(() => `fld_${Math.random().toString(36).slice(2)}`, [])
 
   return (
-    <Modal title={req.title || 'Input required'} onClose={() => onResolve(null)}>
+    <Modal title={req.title || 'Input Required'} onClose={() => onResolve(null)}>
       <form onSubmit={handleSubmit} autoComplete="off">
-        <p style={{ whiteSpace: 'pre-wrap' }}>{req.message}</p>
+        <p style={{
+          whiteSpace: 'pre-wrap',
+          fontSize: 14,
+          lineHeight: 1.6,
+          color: COLORS.textSecondary,
+          margin: '0 0 16px 0'
+        }}>
+          {req.message}
+        </p>
         <input
           type={req.password ? 'password' : 'text'}
           name={randomName}
@@ -62,23 +71,40 @@ const PromptDialog: FC<PromptDialogProps> = ({ req, onResolve }) => {
           placeholder={req.placeholder}
           maxLength={req.maxLength}
           className="input"
-          style={{ marginTop: 8 }}
+          style={{ marginBottom: 8 }}
           autoFocus
         />
         {req.password && (
-          <div style={{ marginTop: 6, fontSize: 12, color: COLORS.gray600 }}>
+          <div style={{
+            marginBottom: 8,
+            fontSize: 11,
+            color: COLORS.gray600,
+            lineHeight: 1.5,
+            fontStyle: 'italic'
+          }}>
             Minimum 12 characters. Long passphrases are encouraged; no special character requirements.
           </div>
         )}
         {!!error && (
-          <div style={{ marginTop: 6, fontSize: 12, color: COLORS.red }}>{error}</div>
+          <div style={{
+            marginBottom: 12,
+            fontSize: 12,
+            color: COLORS.red,
+            fontWeight: 600,
+            padding: 10,
+            background: 'rgba(196, 92, 92, 0.1)',
+            border: '1px solid rgba(196, 92, 92, 0.3)',
+            borderRadius: 4
+          }}>
+            {error}
+          </div>
         )}
         <div
           style={{
             display: 'flex',
             justifyContent: 'flex-end',
-            marginTop: 12,
-            gap: 8,
+            marginTop: 16,
+            gap: 10,
             flexWrap: 'wrap'
           }}
         >

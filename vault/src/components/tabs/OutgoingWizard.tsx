@@ -363,16 +363,28 @@ const OutgoingWizard: FC<OutgoingWizardProps> = ({ vault, onUpdate, notify }) =>
   }
 
   const StepIndicator = () => (
-    <div style={{ display: 'flex', gap: 8, marginBottom: 8, flexWrap: 'wrap' }}>
+    <div style={{ display: 'flex', gap: 8, marginBottom: 16, flexWrap: 'wrap' }}>
       {[1, 2, 3, 4, 5].map((n) => (
         <div
           key={n}
           style={{
-            padding: '6px 10px',
-            borderRadius: 999,
-            background: step === n ? COLORS.blue : '#eee',
-            color: step === n ? '#fff' : '#444',
-            fontSize: 12
+            padding: '8px 14px',
+            borderRadius: 4,
+            background: step === n
+              ? 'linear-gradient(135deg, var(--color-accent-gold) 0%, #b89650 100%)'
+              : 'var(--color-bg-elevated)',
+            border: step === n
+              ? '1px solid rgba(201, 169, 97, 0.3)'
+              : '1px solid var(--color-border-primary)',
+            color: step === n ? '#0f1216' : 'var(--color-text-secondary)',
+            fontSize: 11,
+            fontWeight: step === n ? 600 : 500,
+            letterSpacing: '0.04em',
+            textTransform: 'uppercase',
+            boxShadow: step === n
+              ? '0 2px 8px rgba(0, 0, 0, 0.3), inset 0 1px 0 rgba(255, 255, 255, 0.1)'
+              : 'none',
+            transition: 'all 0.2s ease'
           }}
         >
           {n}.{' '}
@@ -453,6 +465,7 @@ const OutgoingWizard: FC<OutgoingWizardProps> = ({ vault, onUpdate, notify }) =>
     <section className="section">
       <h2 style={{
         marginTop: 0,
+        marginBottom: 8,
         fontSize: 14,
         fontWeight: 600,
         letterSpacing: '0.08em',
@@ -502,7 +515,24 @@ const OutgoingWizard: FC<OutgoingWizardProps> = ({ vault, onUpdate, notify }) =>
                 }}>
                   Output {index + 1}
                 </div>
-                <div style={{ display: 'grid', gap: 8 }}>
+                <div style={{ display: 'grid', gap: 4 }}>
+                  <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+                    <label style={{
+                      fontSize: 12,
+                      fontWeight: 600,
+                      letterSpacing: '0.03em',
+                      color: COLORS.textSecondary
+                    }}>
+                      Address or Script Hex
+                    </label>
+                    <button
+                      onClick={() => setScanningForOutput(index)}
+                      className="btn-ghost"
+                      style={{ fontSize: 11, padding: '4px 8px', height: 'auto' }}
+                    >
+                      📷 Scan QR
+                    </button>
+                  </div>
                   <input
                     placeholder="Address or Script Hex"
                     value={output.destinationAddressOrScript}
@@ -512,13 +542,6 @@ const OutgoingWizard: FC<OutgoingWizardProps> = ({ vault, onUpdate, notify }) =>
                     className="input"
                     autoComplete="off"
                   />
-                  <button
-                    onClick={() => setScanningForOutput(index)}
-                    className="btn-ghost"
-                    style={{ fontSize: 12 }}
-                  >
-                    📷 Scan Address QR
-                  </button>
                 </div>
                 <input
                   type="text"

@@ -26,6 +26,9 @@ const KeyManager: FC<KeyManagerProps> = ({ vault, onUpdate, notify }) => {
   const [savingMemo, setSavingMemo] = useState(false)
   const [showQRSerial, setShowQRSerial] = useState<string | null>(null)
 
+  // Reverse the keys array to show most recent first
+  const reversedKeys = [...vault.keys].reverse()
+
   const beginEdit = (serial: string, currentMemo: string) => {
     setEditingSerial(serial)
     setMemoDraft(currentMemo || '')
@@ -82,119 +85,126 @@ const KeyManager: FC<KeyManagerProps> = ({ vault, onUpdate, notify }) => {
       >
         Generate New Key
       </button>
-      <div style={{ marginTop: 12 }}>
-        {[...vault.keys].reverse().map((k) => (
-          <div
-            key={k.serial}
-            style={{
-              borderTop: `1px solid ${COLORS.border}`,
-              padding: '8px 0',
-              display: 'grid',
-              gridTemplateColumns: '1fr',
-              gap: 8
-            }}
-          >
-            <div>
-              <b>{k.serial}</b> {k.memo && editingSerial !== k.serial && `— ${k.memo}`}{' '}
-              {k.usedOnChain ? (
-                <span style={{ color: '#b36' }}> (used)</span>
-              ) : (
-                <span style={{ color: COLORS.green }}>(unused)</span>
-              )}
-              <div
-                style={{
-                  fontSize: 12,
-                  color: COLORS.gray600,
-                  fontFamily: 'monospace',
-                  wordBreak: 'break-all'
-                }}
-              >
-                {k.public.toAddress()}
-              </div>
-            </div>
-            {showQRSerial === k.serial && (
-              <div style={{ marginTop: 12 }}>
-                <QRDisplay
-                  data={k.public.toAddress()}
-                  size={280}
-                  label={`Address QR - ${k.serial}`}
-                />
-                <button
-                  onClick={() => setShowQRSerial(null)}
-                  className="btn-ghost"
-                  style={{ width: '100%', marginTop: 12 }}
+
+      {vault.keys.length > 0 && (
+        <div
+          style={{
+            marginTop: 12,
+            maxHeight: '600px', // ~5 rows at 120px each
+            overflowY: 'auto',
+            border: `1px solid ${COLORS.border}`,
+            borderRadius: 4,
+            background: 'var(--color-bg-elevated)',
+            padding: '0 12px'
+          }}
+        >
+          {reversedKeys.map((k) => (
+            <div
+              key={k.serial}
+              style={{
+                borderTop: `1px solid ${COLORS.border}`,
+                padding: '16px 0 24px',
+                display: 'grid',
+                gridTemplateColumns: '1fr',
+                gap: 8,
+                // CSS content-visibility for performance with large lists
+                contentVisibility: 'auto',
+                containIntrinsicSize: '0 120px'
+              }}
+            >
+              <div>
+                <b>{k.serial}</b> {k.memo && editingSerial !== k.serial && `— ${k.memo}`}{' '}
+                {k.usedOnChain ? (
+                  <span style={{ color: '#b36' }}> (used)</span>
+                ) : (
+                  <span style={{ color: COLORS.green }}>(unused)</span>
+                )}
+                <div
+                  style={{
+                    fontSize: 12,
+                    color: COLORS.gray600,
+                    fontFamily: 'monospace',
+                    wordBreak: 'break-all'
+                  }}
                 >
-                  Hide QR Code
-                </button>
+                  {k.public.toAddress()}
+                </div>
               </div>
-            )}
-            <div style={{ display: 'grid', gap: 8, gridTemplateColumns: '1fr 1fr' }}>
-              <button
-                onClick={() => setShowQRSerial(showQRSerial === k.serial ? null : k.serial)}
-                className="btn"
-              >
-                {showQRSerial === k.serial ? 'Hide QR' : 'Show QR Code'}
-              </button>
-              <button
-                onClick={async () => {
-                  await vault.downloadDepositSlipTxt(k.serial)
-                  notify('info', `Deposit slip generated for ${k.serial}`)
-                }}
-                className="btn-ghost"
-                title="Creates a text file with the address, script, and metadata you can hand to counterparties as a receipt."
-              >
-                Deposit Slip (.txt)
-              </button>
-              <button
-                onMouseEnter={() => setHoverMap((m) => ({ ...m, [k.serial]: true }))}
-                onMouseLeave={() => setHoverMap((m) => ({ ...m, [k.serial]: false }))}
-                onClick={async () => {
-                  await navigator.clipboard.writeText(k.public.toAddress())
-                  await dialog.alert(
-                    `Address copied.\n\nFor your security, paste the address into a trusted editor and verify it EXACTLY matches:\n\n${k.public.toAddress()}\n\nMalware can rewrite clipboard contents. Always compare before broadcasting or sending.`,
-                    'Verify Copied Address'
-                  )
-                }}
-                className="btn-ghost"
-              >
-                Copy Address
-              </button>
-              {editingSerial === k.serial ? (
-                <button className="btn-ghost" style={{ gridColumn: 'span 2', background: '#999' }} disabled>
-                  Editing…
+              {showQRSerial === k.serial && (
+                <div style={{ marginTop: 12 }}>
+                  <QRDisplay
+                    data={k.public.toAddress()}
+                    size={280}
+                    label={`Address QR - ${k.serial}`}
+                  />
+                </div>
+              )}
+              <div style={{
+                display: 'grid',
+                gap: 8,
+                gridTemplateColumns: 'repeat(auto-fit, minmax(160px, 1fr))'
+              }}>
+                <button
+                  onClick={async () => {
+                    await vault.downloadDepositSlipTxt(k.serial)
+                    notify('info', `Deposit slip generated for ${k.serial}`)
+                  }}
+                  className="btn-ghost"
+                  title="Creates a text file with the address, script, and metadata you can hand to counterparties as a receipt."
+                >
+                  Deposit Slip
                 </button>
-              ) : (
+                <button
+                  onMouseEnter={() => setHoverMap((m) => ({ ...m, [k.serial]: true }))}
+                  onMouseLeave={() => setHoverMap((m) => ({ ...m, [k.serial]: false }))}
+                  onClick={async () => {
+                    await navigator.clipboard.writeText(k.public.toAddress())
+                    await dialog.alert(
+                      `Address copied.\n\nFor your security, paste the address into a trusted editor and verify it EXACTLY matches:\n\n${k.public.toAddress()}\n\nMalware can rewrite clipboard contents. Always compare before broadcasting or sending.`,
+                      'Verify Copied Address'
+                    )
+                  }}
+                  className="btn-ghost"
+                >
+                  Copy Address
+                </button>
                 <button
                   onClick={() => beginEdit(k.serial, k.memo)}
                   className="btn-ghost"
-                  style={{ gridColumn: 'span 2' }}
+                  disabled={editingSerial === k.serial}
                 >
-                  Edit Memo
+                  {editingSerial === k.serial ? 'Editing…' : 'Edit Memo'}
                 </button>
+                <button
+                  onClick={() => setShowQRSerial(showQRSerial === k.serial ? null : k.serial)}
+                  className="btn"
+                >
+                  {showQRSerial === k.serial ? 'Hide QR' : 'Show QR Code'}
+                </button>
+              </div>
+              {editingSerial === k.serial && (
+                <div style={{ display: 'grid', gap: 8 }}>
+                  <input
+                    value={memoDraft}
+                    onChange={(e) => setMemoDraft(e.target.value)}
+                    className="input"
+                    placeholder="Optional memo (visible in this vault only)"
+                    maxLength={256}
+                  />
+                  <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap' }}>
+                    <button onClick={saveMemo} className="btn" disabled={savingMemo}>
+                      {savingMemo ? 'Saving…' : 'Save Memo'}
+                    </button>
+                    <button onClick={cancelEdit} className="btn-ghost">
+                      Cancel
+                    </button>
+                  </div>
+                </div>
               )}
             </div>
-            {editingSerial === k.serial && (
-              <div style={{ display: 'grid', gap: 8 }}>
-                <input
-                  value={memoDraft}
-                  onChange={(e) => setMemoDraft(e.target.value)}
-                  className="input"
-                  placeholder="Optional memo (visible in this vault only)"
-                  maxLength={256}
-                />
-                <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap' }}>
-                  <button onClick={saveMemo} className="btn" disabled={savingMemo}>
-                    {savingMemo ? 'Saving…' : 'Save Memo'}
-                  </button>
-                  <button onClick={cancelEdit} className="btn-ghost">
-                    Cancel
-                  </button>
-                </div>
-              </div>
-            )}
-          </div>
-        ))}
-      </div>
+          ))}
+        </div>
+      )}
     </section>
   )
 }

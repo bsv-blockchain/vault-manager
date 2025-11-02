@@ -320,7 +320,7 @@ function AppInner() {
           <div className="panel" style={{ padding: 24, display: 'grid', gap: 20 }}>
             <h1 style={{
               marginTop: 0,
-              fontSize: 22,
+              fontSize: 32,
               fontWeight: 300,
               letterSpacing: '0.02em',
               color: 'var(--color-text-primary)',
@@ -433,6 +433,154 @@ function AppInner() {
       <div className="container">
         {notification && <NotificationBanner notification={notification} onDismiss={() => setNotification(null)} />}
 
+        {entropyRequest && (
+          <EntropyCaptureModal
+            bytesNeeded={entropyRequest.size}
+            onComplete={(bytes: number[]) => {
+              entropyRequest.resolve(bytes)
+              setEntropyRequest(null)
+            }}
+            onCancel={() => {
+              entropyRequest.reject(new Error('Entropy collection cancelled'))
+              setEntropyRequest(null)
+            }}
+          />
+        )}
+
+        {incomingPreview && (
+          <ProcessIncomingModal
+            vault={vault}
+            preview={incomingPreview}
+            onClose={() => setIncomingPreview(null)}
+            onSuccess={(txid: string) => {
+              setIncomingPreview(null)
+              forceAppUpdate()
+              notify('success', `Transaction ${txid} processed. SAVE the vault to persist changes.`)
+              setActiveTab('dashboard')
+            }}
+            onError={(err: string) => notify('error', err)}
+          />
+        )}
+
+        <div className="panel" style={{ padding: 20, marginBottom: 14 }}>
+          {dirty && (
+            <div
+              style={{
+                background: 'rgba(196, 92, 92, 0.15)',
+                border: '1px solid var(--color-error)',
+                color: 'var(--color-error)',
+                padding: 14,
+                marginBottom: 16,
+                fontWeight: 600,
+                borderRadius: 4,
+                fontSize: 13,
+                letterSpacing: '0.03em',
+                boxShadow: '0 2px 8px rgba(196, 92, 92, 0.3)'
+              }}
+            >
+              UNSAVED CHANGES — Save the new vault file, verify its integrity, and then securely delete the old version.
+            </div>
+          )}
+
+          <header
+            style={{
+              borderBottom: '1px solid var(--color-border-accent)',
+              paddingBottom: 16,
+              marginBottom: 16,
+              display: 'grid',
+              gridTemplateColumns: '1fr',
+              gap: 10
+            }}
+          >
+            <div>
+              <h1 style={{
+                margin: 0,
+                fontSize: 32,
+                fontWeight: 300,
+                letterSpacing: '0.04em',
+                color: 'var(--color-text-primary)',
+                background: 'linear-gradient(90deg, var(--color-accent-gold) 0%, var(--color-text-primary) 50%)',
+                WebkitBackgroundClip: 'text',
+                WebkitTextFillColor: 'transparent',
+                backgroundClip: 'text'
+              }}>
+                VAULT MANAGER
+              </h1>
+              <div style={{
+                color: 'var(--color-text-secondary)',
+                marginTop: 8,
+                fontSize: 13,
+                letterSpacing: '0.01em'
+              }}>
+                Vault: <span style={{
+                  color: 'var(--color-accent-gold)',
+                  fontWeight: 600
+                }}>{vault.vaultName}</span>
+                <span style={{ margin: '0 8px', color: 'var(--color-border-secondary)' }}>•</span>
+                <span style={{ color: 'var(--color-text-tertiary)' }}>rev {vault.vaultRevision}</span>
+              </div>
+            </div>
+            <div style={{ display: 'grid', gap: 10, gridTemplateColumns: '1fr 1fr', alignItems: 'center' }}>
+              <input
+                style={{ gridColumn: 'span 2' }}
+                type="file"
+                accept=".vaultfile,application/octet-stream"
+                onChange={e => e.target.files && onOpenVault(e.target.files[0])}
+              />
+              <button onClick={onSaveVault} className="btn" style={{ gridColumn: 'span 2' }}>
+                Save Vault
+              </button>
+            </div>
+          </header>
+
+          {/* Tabs */}
+          <div
+            style={{
+              display: 'flex',
+              gap: 8,
+              borderBottom: '1px solid var(--border)',
+              marginBottom: 12,
+              overflowX: 'auto'
+            }}
+          >
+            {tabs.map(t => (
+              <button
+                key={t.key}
+                onClick={() => setActiveTab(t.key)}
+                className={activeTab === t.key ? 'tab tab-active' : 'tab'}
+              >
+                {t.label}
+              </button>
+            ))}
+          </div>
+
+          {/* Active Tab Panels */}
+          {activeTab === 'dashboard' && <DashboardPanel vault={vault} balance={balance} triggerRerender={forceAppUpdate} />}
+
+          {activeTab === 'keys' && <KeyManager vault={vault} onUpdate={forceAppUpdate} notify={notify} />}
+
+          {activeTab === 'incoming' && (
+            <IncomingManager vault={vault} onPreview={setIncomingPreview} onError={(e: string) => notify('error', e)} />
+          )}
+
+          {activeTab === 'outgoing' && <OutgoingWizard vault={vault} notify={notify} onUpdate={forceAppUpdate} />}
+
+          {activeTab === 'logs' && <LogsPanel vault={vault} onUpdate={forceAppUpdate} />}
+
+          {activeTab === 'settings' && (
+            <SettingsPanel
+              vault={vault}
+              onUpdate={forceAppUpdate}
+              setLastSavedPlainHash={setLastSavedPlainHash}
+              plainHash={plainHash}
+              expectedHash={expectedHashRecord}
+              backups={backupEntries}
+              onDownloadBackup={handleDownloadBackup}
+              loadedFileMeta={loadedFileMeta}
+            />
+          )}
+        </div>
+
         {loadedFileMeta && (
           <div
             className="panel"
@@ -539,154 +687,6 @@ function AppInner() {
             </div>
           </div>
         )}
-
-        {entropyRequest && (
-          <EntropyCaptureModal
-            bytesNeeded={entropyRequest.size}
-            onComplete={(bytes: number[]) => {
-              entropyRequest.resolve(bytes)
-              setEntropyRequest(null)
-            }}
-            onCancel={() => {
-              entropyRequest.reject(new Error('Entropy collection cancelled'))
-              setEntropyRequest(null)
-            }}
-          />
-        )}
-
-        {incomingPreview && (
-          <ProcessIncomingModal
-            vault={vault}
-            preview={incomingPreview}
-            onClose={() => setIncomingPreview(null)}
-            onSuccess={(txid: string) => {
-              setIncomingPreview(null)
-              forceAppUpdate()
-              notify('success', `Transaction ${txid} processed. SAVE the vault to persist changes.`)
-              setActiveTab('dashboard')
-            }}
-            onError={(err: string) => notify('error', err)}
-          />
-        )}
-
-        <div className="panel" style={{ padding: 20, marginBottom: 14 }}>
-          {dirty && (
-            <div
-              style={{
-                background: 'rgba(196, 92, 92, 0.15)',
-                border: '1px solid var(--color-error)',
-                color: 'var(--color-error)',
-                padding: 14,
-                marginBottom: 16,
-                fontWeight: 600,
-                borderRadius: 4,
-                fontSize: 13,
-                letterSpacing: '0.03em',
-                boxShadow: '0 2px 8px rgba(196, 92, 92, 0.3)'
-              }}
-            >
-              UNSAVED CHANGES — Save the new vault file, verify its integrity, and then securely delete the old version.
-            </div>
-          )}
-
-          <header
-            style={{
-              borderBottom: '1px solid var(--color-border-accent)',
-              paddingBottom: 16,
-              marginBottom: 16,
-              display: 'grid',
-              gridTemplateColumns: '1fr',
-              gap: 10
-            }}
-          >
-            <div>
-              <h1 style={{
-                margin: 0,
-                fontSize: 20,
-                fontWeight: 300,
-                letterSpacing: '0.04em',
-                color: 'var(--color-text-primary)',
-                background: 'linear-gradient(90deg, var(--color-accent-gold) 0%, var(--color-text-primary) 50%)',
-                WebkitBackgroundClip: 'text',
-                WebkitTextFillColor: 'transparent',
-                backgroundClip: 'text'
-              }}>
-                VAULT MANAGER
-              </h1>
-              <div style={{
-                color: 'var(--color-text-secondary)',
-                marginTop: 8,
-                fontSize: 13,
-                letterSpacing: '0.01em'
-              }}>
-                Vault: <span style={{
-                  color: 'var(--color-accent-gold)',
-                  fontWeight: 600
-                }}>{vault.vaultName}</span>
-                <span style={{ margin: '0 8px', color: 'var(--color-border-secondary)' }}>•</span>
-                <span style={{ color: 'var(--color-text-tertiary)' }}>rev {vault.vaultRevision}</span>
-              </div>
-            </div>
-            <div style={{ display: 'grid', gap: 10, gridTemplateColumns: '1fr 1fr', alignItems: 'center' }}>
-              <input
-                style={{ gridColumn: 'span 2' }}
-                type="file"
-                accept=".vaultfile,application/octet-stream"
-                onChange={e => e.target.files && onOpenVault(e.target.files[0])}
-              />
-              <button onClick={onSaveVault} className="btn" style={{ gridColumn: 'span 2' }}>
-                Save Vault
-              </button>
-            </div>
-          </header>
-
-          {/* Tabs */}
-          <div
-            style={{
-              display: 'flex',
-              gap: 8,
-              borderBottom: '1px solid var(--border)',
-              marginBottom: 12,
-              overflowX: 'auto'
-            }}
-          >
-            {tabs.map(t => (
-              <button
-                key={t.key}
-                onClick={() => setActiveTab(t.key)}
-                className={activeTab === t.key ? 'tab tab-active' : 'tab'}
-              >
-                {t.label}
-              </button>
-            ))}
-          </div>
-
-          {/* Active Tab Panels */}
-          {activeTab === 'dashboard' && <DashboardPanel vault={vault} balance={balance} triggerRerender={forceAppUpdate} />}
-
-          {activeTab === 'keys' && <KeyManager vault={vault} onUpdate={forceAppUpdate} notify={notify} />}
-
-          {activeTab === 'incoming' && (
-            <IncomingManager vault={vault} onPreview={setIncomingPreview} onError={(e: string) => notify('error', e)} />
-          )}
-
-          {activeTab === 'outgoing' && <OutgoingWizard vault={vault} notify={notify} onUpdate={forceAppUpdate} />}
-
-          {activeTab === 'logs' && <LogsPanel vault={vault} onUpdate={forceAppUpdate} />}
-
-          {activeTab === 'settings' && (
-            <SettingsPanel
-              vault={vault}
-              onUpdate={forceAppUpdate}
-              setLastSavedPlainHash={setLastSavedPlainHash}
-              plainHash={plainHash}
-              expectedHash={expectedHashRecord}
-              backups={backupEntries}
-              onDownloadBackup={handleDownloadBackup}
-              loadedFileMeta={loadedFileMeta}
-            />
-          )}
-        </div>
       </div>
     </div>
   )

@@ -63,7 +63,7 @@ const DashboardPanel: FC<DashboardPanelProps> = ({ vault, balance, triggerRerend
           }}>
             Current UTXOs ({vault.coins.length})
           </h3>
-          {vault.coins.length === 0 && (
+          {vault.coins.length === 0 ? (
             <div style={{
               color: COLORS.label,
               fontSize: 13,
@@ -72,52 +72,67 @@ const DashboardPanel: FC<DashboardPanelProps> = ({ vault, balance, triggerRerend
             }}>
               No spendable coins
             </div>
-          )}
-          {vault.coins.map((c) => {
-            const id = `${c.txid}:${c.outputIndex}`
-            let sats = 0
-            try {
-              const tx = getTxFromStore(vault.beefStore, c.txid)
-              sats = tx.outputs[c.outputIndex].satoshis as number
-            } catch {}
-            return (
-              <div
-                key={id}
-                style={{
-                  borderTop: `1px solid ${COLORS.border}`,
-                  padding: '12px 0',
-                  fontSize: 12,
-                  wordBreak: 'break-all'
-                }}
-              >
-                <div style={{
-                  fontFamily: '"SF Mono", "Monaco", monospace',
-                  color: COLORS.value,
-                  marginBottom: 6,
-                  fontSize: 11
-                }}>
-                  {id}
-                </div>
-                <div style={{ color: COLORS.label, fontSize: 13 }}>
-                  {sats.toLocaleString()} sats
-                  <span style={{ margin: '0 6px', color: COLORS.border }}>•</span>
-                  <span style={{ color: COLORS.value, fontWeight: 600 }}>
-                    {(sats / 100000000).toFixed(8)}
-                  </span> BSV
-                </div>
-                {c.memo && (
-                  <div style={{
-                    marginTop: 6,
-                    color: '#c9a961',
-                    fontSize: 12,
-                    fontStyle: 'italic'
-                  }}>
-                    {c.memo}
+          ) : (
+            <div
+              style={{
+                maxHeight: '500px', // ~5 rows at 100px each
+                overflowY: 'auto',
+                border: `1px solid ${COLORS.border}`,
+                borderRadius: 4,
+                background: 'var(--color-bg-elevated)',
+                padding: '0 12px'
+              }}
+            >
+              {vault.coins.map((c) => {
+                const id = `${c.txid}:${c.outputIndex}`
+                let sats = 0
+                try {
+                  const tx = getTxFromStore(vault.beefStore, c.txid)
+                  sats = tx.outputs[c.outputIndex].satoshis as number
+                } catch {}
+                return (
+                  <div
+                    key={id}
+                    style={{
+                      borderTop: `1px solid ${COLORS.border}`,
+                      padding: '12px 0',
+                      fontSize: 12,
+                      wordBreak: 'break-all',
+                      // CSS content-visibility for performance with large lists
+                      contentVisibility: 'auto',
+                      containIntrinsicSize: '0 100px'
+                    }}
+                  >
+                    <div style={{
+                      fontFamily: '"SF Mono", "Monaco", monospace',
+                      color: COLORS.value,
+                      marginBottom: 6,
+                      fontSize: 11
+                    }}>
+                      {id}
+                    </div>
+                    <div style={{ color: COLORS.label, fontSize: 13 }}>
+                      {sats.toLocaleString()} sats
+                      <span style={{ margin: '0 6px', color: COLORS.border }}>•</span>
+                      <span style={{ color: COLORS.value, fontWeight: 600 }}>
+                        {(sats / 100000000).toFixed(8)}
+                      </span> BSV
+                    </div>
+                    {c.memo && (
+                      <div style={{
+                        marginTop: 6,
+                        color: '#c9a961',
+                        fontSize: 12,
+                        fontStyle: 'italic'
+                      }}>
+                        {c.memo}
+                      </div>
+                    )}
                   </div>
-                )}
-              </div>
-            )
-          })}
+                )
+              })}
+            </div>
+          )}
         </div>
         <div style={{ flex: 1, minWidth: 0 }}>
           <h3 style={{

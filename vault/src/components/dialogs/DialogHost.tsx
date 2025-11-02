@@ -58,8 +58,16 @@ const DialogHost: FC<DialogHostProps> = ({ queue, setQueue }) => {
           close()
         }}
       >
-        <p style={{ whiteSpace: 'pre-wrap' }}>{req.message}</p>
-        <div style={{ display: 'flex', justifyContent: 'flex-end', marginTop: 12 }}>
+        <p style={{
+          whiteSpace: 'pre-wrap',
+          fontSize: 14,
+          lineHeight: 1.6,
+          color: '#9da3ae',
+          margin: '0 0 20px 0'
+        }}>
+          {req.message}
+        </p>
+        <div style={{ display: 'flex', justifyContent: 'flex-end', marginTop: 20 }}>
           <button
             onClick={() => {
               req.resolve()
@@ -84,13 +92,21 @@ const DialogHost: FC<DialogHostProps> = ({ queue, setQueue }) => {
           close()
         }}
       >
-        <p style={{ whiteSpace: 'pre-wrap' }}>{req.message}</p>
+        <p style={{
+          whiteSpace: 'pre-wrap',
+          fontSize: 14,
+          lineHeight: 1.6,
+          color: '#9da3ae',
+          margin: '0 0 20px 0'
+        }}>
+          {req.message}
+        </p>
         <div
           style={{
             display: 'flex',
             justifyContent: 'flex-end',
-            marginTop: 12,
-            gap: 8,
+            marginTop: 20,
+            gap: 10,
             flexWrap: 'wrap'
           }}
         >

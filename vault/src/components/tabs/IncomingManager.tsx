@@ -2,6 +2,7 @@ import React, { FC, useState } from 'react'
 import Vault from '../../Vault'
 import { IncomingPreview } from '../../types'
 import { validateBeefHex } from '../../validators'
+import QRScanner from '../common/QRScanner'
 
 interface IncomingManagerProps {
   vault: Vault
@@ -16,6 +17,12 @@ const COLORS = {
 const IncomingManager: FC<IncomingManagerProps> = ({ vault, onPreview, onError }) => {
   const [hex, setHex] = useState('')
   const [isProcessing, setIsProcessing] = useState(false)
+  const [showScanner, setShowScanner] = useState(false)
+
+  function handleQRScan(data: string) {
+    setHex(data)
+    setShowScanner(false)
+  }
 
   async function handlePreview() {
     if (!hex.trim()) {
@@ -52,11 +59,22 @@ const IncomingManager: FC<IncomingManagerProps> = ({ vault, onPreview, onError }
         value={hex}
         onChange={(e) => setHex(e.target.value)}
       />
-      <div style={{ marginTop: 8 }}>
+      <div style={{ marginTop: 8, display: 'flex', gap: 8 }}>
         <button onClick={handlePreview} disabled={isProcessing} className="btn">
           {isProcessing ? 'Verifying...' : 'Review & Process'}
         </button>
+        <button onClick={() => setShowScanner(true)} className="btn-ghost">
+          📷 Scan BEEF QR
+        </button>
       </div>
+
+      {showScanner && (
+        <QRScanner
+          onScan={handleQRScan}
+          onClose={() => setShowScanner(false)}
+          title="Scan Atomic BEEF QR Code"
+        />
+      )}
     </section>
   )
 }

@@ -141,6 +141,10 @@ const SettingsPanel: FC<SettingsPanelProps> = ({
               maxLength={64}
             />
           </div>
+          
+          <button style={{ flex: 1 }} onClick={doChangePassword} className="btn-ghost">
+            Change Password
+          </button>
 
           <label style={{
             display: 'flex',
@@ -287,62 +291,12 @@ const SettingsPanel: FC<SettingsPanelProps> = ({
               maxLength={10}
             />
           </div>
-
-          <div style={{ display: 'grid', gap: 8, gridTemplateColumns: '1fr 1fr', alignItems: 'center' }}>
-            <button onClick={save} className="btn">
+          <div style={{ display: 'grid', width: '100%', alignItems: 'center', gap: 8, justifyItems: 'right', gridTemplateColumns: '1fr' }}>
+            <button style={{ flex: 1 }} onClick={save} className="btn">
               Apply Changes
-            </button>
-            <button onClick={doChangePassword} className="btn-ghost">
-              Change Password
             </button>
           </div>
         </div>
-
-        {plainHash && (
-          <div
-            style={{
-              borderTop: `1px solid ${COLORS.border}`,
-              paddingTop: 12,
-              display: 'grid',
-              gap: 8
-            }}
-          >
-            <div style={{
-              fontWeight: 600,
-              fontSize: 13,
-              letterSpacing: '0.05em',
-              textTransform: 'uppercase',
-              color: COLORS.label
-            }}>
-              File Integrity Snapshot
-            </div>
-            {expectedHash ? (
-              <div style={{ fontSize: 13, wordBreak: 'break-all' }}>
-                <b>Last approved hash:</b> <code>{expectedHash.fileHash}</code> (saved{' '}
-                {new Date(expectedHash.savedAt).toLocaleString()})
-              </div>
-            ) : (
-              <div style={{ fontSize: 13, color: COLORS.gray600 }}>
-                Save this vault to establish a baseline hash for future comparisons.
-              </div>
-            )}
-            {loadedFileMeta?.fileHash && (
-              <div style={{ fontSize: 13, wordBreak: 'break-all' }}>
-                <b>Current loaded hash:</b> <code>{loadedFileMeta.fileHash}</code>
-                {expectedHash && loadedFileMeta.mismatch ? (
-                  <span style={{ color: '#a12121', fontWeight: 600 }}>
-                    {' '}
-                    — differs from last approved
-                  </span>
-                ) : null}
-              </div>
-            )}
-            <div style={{ fontSize: 12, color: COLORS.gray600 }}>
-              Keep these hashes with your audit logs. If the loaded hash ever differs from the
-              approved value, recover using an automatic backup or abort operations.
-            </div>
-          </div>
-        )}
 
         <div
           style={{
