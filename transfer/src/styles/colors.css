@@ -1,0 +1,40 @@
+/* Institutional Vault Console - Color Palette */
+:root {
+  /* Base graphite tones */
+  --color-bg-primary: #0f1216;
+  --color-bg-secondary: #1a1d24;
+  --color-bg-elevated: #252931;
+  --color-bg-hover: #2d3139;
+
+  /* Metallic accents */
+  --color-accent-gold: #c9a961;
+  --color-accent-steel: #8a9199;
+  --color-accent-copper: #b87d5f;
+
+  /* Text hierarchy */
+  --color-text-primary: #e4e6eb;
+  --color-text-secondary: #9da3ae;
+  --color-text-tertiary: #6b7280;
+  --color-text-muted: #4a5058;
+
+  /* Status colors - muted institutional palette */
+  --color-success: #5a9367;
+  --color-error: #c45c5c;
+  --color-warning: #c9a961;
+  --color-info: #5d8cb8;
+
+  /* Borders - subtle metallic sheen */
+  --color-border-primary: #2d3139;
+  --color-border-secondary: #3a3f49;
+  --color-border-accent: rgba(201, 169, 97, 0.2);
+
+  /* Legacy support (will be removed gradually) */
+  --color-red: #c45c5c;
+  --color-green: #5a9367;
+  --color-blue: #5d8cb8;
+  --color-gray-600: #6b7280;
+  --color-gray-700: #9da3ae;
+  --color-border: #2d3139;
+  --color-light: #0f1216;
+  --color-panel: #1a1d24;
+}

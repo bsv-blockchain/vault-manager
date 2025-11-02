@@ -1,0 +1,81 @@
+/* Button Styles - Institutional Console */
+.btn {
+  background: linear-gradient(135deg, var(--color-accent-gold) 0%, #b89650 100%);
+  color: #0f1216;
+  border: 1px solid rgba(201, 169, 97, 0.3);
+  padding: 12px 20px;
+  border-radius: 4px;
+  cursor: pointer;
+  width: 100%;
+  max-width: 240px;
+  touch-action: manipulation;
+  font-weight: 600;
+  font-size: 13px;
+  letter-spacing: 0.05em;
+  text-transform: uppercase;
+  transition: all 0.2s ease;
+  box-shadow: 0 2px 8px rgba(0, 0, 0, 0.3),
+              inset 0 1px 0 rgba(255, 255, 255, 0.1);
+}
+
+.btn:hover {
+  background: linear-gradient(135deg, #d4b56d 0%, #c9a961 100%);
+  box-shadow: 0 4px 12px rgba(201, 169, 97, 0.3),
+              inset 0 1px 0 rgba(255, 255, 255, 0.15);
+  transform: translateY(-1px);
+}
+
+.btn:active {
+  transform: translateY(0);
+  box-shadow: 0 1px 4px rgba(0, 0, 0, 0.3);
+}
+
+.btn-ghost {
+  background: var(--color-bg-elevated);
+  color: var(--color-text-primary);
+  border: 1px solid var(--color-border-secondary);
+  padding: 12px 20px;
+  border-radius: 4px;
+  cursor: pointer;
+  width: 100%;
+  max-width: 240px;
+  touch-action: manipulation;
+  font-weight: 500;
+  font-size: 13px;
+  letter-spacing: 0.03em;
+  transition: all 0.2s ease;
+  box-shadow: 0 2px 4px rgba(0, 0, 0, 0.2);
+}
+
+.btn-ghost:hover {
+  background: var(--color-bg-hover);
+  border-color: var(--color-accent-steel);
+  color: var(--color-accent-steel);
+  box-shadow: 0 4px 8px rgba(0, 0, 0, 0.3);
+  transform: translateY(-1px);
+}
+
+.btn-ghost:active {
+  transform: translateY(0);
+  box-shadow: 0 1px 3px rgba(0, 0, 0, 0.2);
+}
+
+.btn-remove {
+  background: rgba(196, 92, 92, 0.15);
+  color: var(--color-error);
+  border: 1px solid rgba(196, 92, 92, 0.3);
+  padding: 9px 16px;
+  border-radius: 4px;
+  cursor: pointer;
+  font-size: 12px;
+  font-weight: 600;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+  transition: all 0.2s ease;
+}
+
+.btn-remove:hover {
+  background: rgba(196, 92, 92, 0.25);
+  border-color: var(--color-error);
+  box-shadow: 0 2px 8px rgba(196, 92, 92, 0.3);
+}

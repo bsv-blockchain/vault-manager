@@ -1,0 +1,111 @@
+/* Main stylesheet - imports all other CSS files */
+@import './colors.css';
+@import './common.css';
+@import './buttons.css';
+@import './inputs.css';
+
+/* Global Institutional Polish */
+* {
+  box-sizing: border-box;
+}
+
+body {
+  margin: 0;
+  padding: 0;
+  font-family: Inter, system-ui, -apple-system, Segoe UI, Roboto, sans-serif;
+  -webkit-font-smoothing: antialiased;
+  -moz-osx-font-smoothing: grayscale;
+}
+
+/* Custom Scrollbar - Dark Theme */
+::-webkit-scrollbar {
+  width: 10px;
+  height: 10px;
+}
+
+::-webkit-scrollbar-track {
+  background: var(--color-bg-primary);
+  border-left: 1px solid var(--color-border-primary);
+}
+
+::-webkit-scrollbar-thumb {
+  background: var(--color-bg-elevated);
+  border: 1px solid var(--color-border-secondary);
+  border-radius: 2px;
+}
+
+::-webkit-scrollbar-thumb:hover {
+  background: var(--color-bg-hover);
+  border-color: var(--color-accent-steel);
+}
+
+::-webkit-scrollbar-corner {
+  background: var(--color-bg-primary);
+}
+
+/* Selection styling */
+::selection {
+  background: rgba(201, 169, 97, 0.3);
+  color: var(--color-text-primary);
+}
+
+/* Code blocks */
+code {
+  font-family: "SF Mono", "Monaco", "Cascadia Code", "Roboto Mono", monospace;
+  font-size: 0.9em;
+  background: var(--color-bg-primary);
+  padding: 2px 6px;
+  border-radius: 3px;
+  border: 1px solid var(--color-border-secondary);
+  color: var(--color-accent-gold);
+}
+
+/* Focus styles */
+button:focus-visible,
+input:focus-visible {
+  outline: 2px solid var(--color-accent-gold);
+  outline-offset: 2px;
+}
+
+/* Headings - institutional hierarchy */
+h1, h2, h3, h4, h5, h6 {
+  font-weight: 600;
+  letter-spacing: 0.03em;
+  color: var(--color-text-primary);
+  margin: 0;
+}
+
+h1 {
+  font-size: 22px;
+  font-weight: 300;
+  letter-spacing: 0.04em;
+}
+
+h2 {
+  font-size: 16px;
+  text-transform: uppercase;
+  letter-spacing: 0.08em;
+}
+
+h3 {
+  font-size: 14px;
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+}
+
+/* Link styling */
+a {
+  color: var(--color-accent-gold);
+  text-decoration: none;
+  transition: color 0.2s ease;
+}
+
+a:hover {
+  color: var(--color-accent-steel);
+}
+
+/* Strong/Bold text */
+strong, b {
+  font-weight: 600;
+  color: var(--color-text-primary);
+}
