@@ -14,7 +14,6 @@ Offline-first tooling for operating a high-assurance Bitcoin SV cold vault. The 
 - **Atomic BEEF everywhere:** Every ingress and egress uses BRC-95 containers, keeping proofs attached to the subject transaction for auditability.
 - **Evidence-driven UX:** Two-person controls, attestation prompts, and checksum workflows align with the Operator’s Manual.
 - **Offline bundle:** React/Vite frontend produces a static build that runs from removable media with zero outbound networking.
-- **Automation hooks:** Top-level scripts (`lars`, `cars`) integrate with the broader BSV build/deploy toolchain for staging environments.
 
 ## Repository Layout
 
