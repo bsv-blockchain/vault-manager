@@ -14,6 +14,7 @@
   "license": "ISC",
   "dependencies": {
     "@bsv/sdk": "^1.8.11",
+    "@bsv/wallet-toolbox-client": "^1.6.38",
     "qr-scanner": "^1.4.2",
     "qrcode": "^1.5.4",
     "react": "^19.2.0",

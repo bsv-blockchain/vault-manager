@@ -1,0 +1,36 @@
+version: '3.8'
+
+services:
+  vault:
+    build:
+      context: ./vault
+      dockerfile: Dockerfile
+    container_name: bsv-vault-manager
+    ports:
+      - "3000:80"
+    restart: unless-stopped
+    networks:
+      - bsv-network
+    labels:
+      - "com.bsv.app=vault-manager"
+      - "com.bsv.description=BSV Vault Manager - Secure offline transaction management"
+
+  transfer:
+    build:
+      context: ./transfer
+      dockerfile: Dockerfile
+    container_name: bsv-transfer
+    ports:
+      - "3001:80"
+    restart: unless-stopped
+    networks:
+      - bsv-network
+    labels:
+      - "com.bsv.app=transfer"
+      - "com.bsv.description=BSV Transfer - Transaction creation and QR transmission"
+
+networks:
+  bsv-network:
+    driver: bridge
+    name: bsv-network
+

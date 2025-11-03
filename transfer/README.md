@@ -1,4 +1,4 @@
-# BSV Transfer App
+# Vault Transfer App
 
 A sleek, institutional-themed transaction management app for BSV blockchain transfers. Features Send and Receive modes with animated QR code support for transmitting AtomicBEEF transactions.
 
