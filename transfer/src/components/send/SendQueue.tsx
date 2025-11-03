@@ -228,7 +228,7 @@ export default function SendQueue({ onError }: SendQueueProps) {
           <div style={{ display: 'grid', gap: 8 }}>
             <button
               onClick={() => {
-                markAsConfirmed(selectedTxId)
+                markAsConfirmed(selectedTxId!)
                 setSelectedTxId(null)
               }}
               className="btn"
@@ -246,7 +246,7 @@ export default function SendQueue({ onError }: SendQueueProps) {
             <button
               onClick={() => {
                 if (confirm('Are you sure you want to remove this transaction?')) {
-                  removeTransaction(selectedTxId)
+                  removeTransaction(selectedTxId!)
                   setSelectedTxId(null)
                 }
               }}

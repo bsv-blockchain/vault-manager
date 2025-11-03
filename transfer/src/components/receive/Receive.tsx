@@ -80,6 +80,7 @@ export default function Receive({ onError }: ReceiveProps) {
       <section className="section">
         <h2 style={{
           marginTop: 0,
+          marginBottom: 8,
           fontSize: 14,
           fontWeight: 600,
           letterSpacing: '0.08em',
