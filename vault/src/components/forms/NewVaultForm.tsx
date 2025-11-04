@@ -14,10 +14,10 @@ interface NewVaultFormProps {
 }
 
 const COLORS = {
-  red: '#8b0000',
-  green: '#0a7b22',
-  gray600: '#555',
-  border: '#ddd'
+  red: 'var(--color-error)',
+  green: 'var(--color-success)',
+  gray600: 'var(--color-text-tertiary)',
+  border: 'var(--color-border-secondary)'
 }
 
 const NewVaultForm: FC<NewVaultFormProps> = ({ onSubmit, onCancel, submitting }) => {
@@ -123,10 +123,11 @@ const NewVaultForm: FC<NewVaultFormProps> = ({ onSubmit, onCancel, submitting })
   }
 
   const advancedBoxStyle: React.CSSProperties = {
-    border: `1px dashed ${COLORS.border}`,
-    borderRadius: 8,
-    padding: 12,
-    background: '#fafafa',
+    border: `1px dashed var(--color-border-secondary)`,
+    borderRadius: 4,
+    padding: 16,
+    marginTop: 14,
+    background: 'rgba(26, 29, 36, 0.5)',
     display: 'grid',
     gap: 8
   }
@@ -260,12 +261,6 @@ const NewVaultForm: FC<NewVaultFormProps> = ({ onSubmit, onCancel, submitting })
           <button
             type="button"
             onClick={() => setShowAdvanced((s) => !s)}
-            style={{
-              background: showAdvanced ? COLORS.green : '#666',
-              color: '#fff',
-              width: '100%',
-              maxWidth: 240
-            }}
             className="btn-ghost"
           >
             {showAdvanced ? 'Hide Advanced Options' : 'Show Advanced Options'}

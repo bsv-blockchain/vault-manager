@@ -9,8 +9,8 @@ interface EntropyCaptureModalProps {
 }
 
 const COLORS = {
-  green: '#0a7b22',
-  gray600: '#555'
+  green: 'var(--color-success)',
+  gray600: 'var(--color-text-tertiary)'
 }
 
 const EntropyCaptureModal: FC<EntropyCaptureModalProps> = ({
@@ -92,7 +92,7 @@ const EntropyCaptureModal: FC<EntropyCaptureModalProps> = ({
           Wiggle the mouse or trackpad, mash random keys, and paste anything unpredictable.
           We'll capture enough noise automatically.
         </p>
-        <div style={{ height: 14, borderRadius: 999, background: '#eee', overflow: 'hidden' }}>
+        <div style={{ height: 14, borderRadius: 999, background: 'var(--color-bg-elevated)', overflow: 'hidden' }}>
           <div
             style={{
               width: `${progress * 100}%`,

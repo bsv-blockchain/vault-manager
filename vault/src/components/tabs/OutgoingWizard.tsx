@@ -20,14 +20,14 @@ interface OutgoingWizardProps {
 }
 
 const COLORS = {
-  red: '#c45c5c',
-  green: '#5a9367',
-  blue: '#5d8cb8',
-  accent: '#c9a961',
-  gray600: '#6b7280',
-  border: '#3a3f49',
-  text: '#e4e6eb',
-  textSecondary: '#9da3ae'
+  red: 'var(--color-error)',
+  green: 'var(--color-success)',
+  blue: 'var(--color-info)',
+  accent: 'var(--color-accent-gold)',
+  gray600: 'var(--color-text-tertiary)',
+  border: 'var(--color-border-secondary)',
+  text: 'var(--color-text-primary)',
+  textSecondary: 'var(--color-text-secondary)'
 }
 
 const OutgoingWizard: FC<OutgoingWizardProps> = ({ vault, onUpdate, notify }) => {
@@ -592,10 +592,11 @@ const OutgoingWizard: FC<OutgoingWizardProps> = ({ vault, onUpdate, notify }) =>
           <b>Input Selection</b>
           <div
             style={{
-              background: '#eee',
+              background: 'var(--color-bg-elevated)',
               padding: '8px 12px',
               borderRadius: 8,
               marginTop: 8,
+              border: `1px solid var(--color-border-secondary)`,
               borderLeft: `4px solid ${totalInputSats >= totalOutputSats ? COLORS.green : COLORS.red}`
             }}
           >

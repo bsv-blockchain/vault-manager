@@ -12,8 +12,8 @@ interface ProcessIncomingModalProps {
 }
 
 const COLORS = {
-  gray600: '#555',
-  border: '#ddd'
+  gray600: 'var(--color-text-tertiary)',
+  border: 'var(--color-border-secondary)'
 }
 
 const ProcessIncomingModal: FC<ProcessIncomingModalProps> = ({

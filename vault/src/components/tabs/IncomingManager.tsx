@@ -11,7 +11,7 @@ interface IncomingManagerProps {
 }
 
 const COLORS = {
-  gray600: '#555'
+  gray600: 'var(--color-text-tertiary)'
 }
 
 const IncomingManager: FC<IncomingManagerProps> = ({ vault, onPreview, onError }) => {
