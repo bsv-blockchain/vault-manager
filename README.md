@@ -67,4 +67,4 @@ shasum -a 256 * assets/* > SHA256SUMS.txt
 
 ## License
 
-Open BSV
+Apache License 2.0. See [LICENSE](LICENSE).

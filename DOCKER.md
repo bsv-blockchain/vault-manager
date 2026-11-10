@@ -473,4 +473,4 @@ For issues or questions:
 
 ## License
 
-Same as parent project (Open BSV / ISC)
+Apache License 2.0. See [LICENSE](LICENSE).

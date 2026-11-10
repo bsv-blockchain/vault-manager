@@ -3,7 +3,7 @@
   "version": "1.0.0",
   "private": true,
   "type": "module",
-  "license": "Open BSV License",
+  "license": "Apache-2.0",
   "dependencies": {
     "@bsv/sdk": "^1.8.8",
     "@types/qrcode": "^1.5.6",
