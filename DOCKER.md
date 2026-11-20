@@ -96,7 +96,7 @@ Both apps use multi-stage builds:
 ### Container Details
 
 **Vault Manager Container**:
-- Base Image: `nginx:alpine`
+- Base Image: `nginx:1.31.9-alpine`
 - Internal Port: 80
 - Exposed Port: 3000
 - Network: bsv-network
@@ -104,7 +104,7 @@ Both apps use multi-stage builds:
 - Build Context: `./vault`
 
 **Transfer Container**:
-- Base Image: `nginx:alpine`
+- Base Image: `nginx:1.31.9-alpine`
 - Internal Port: 80
 - Exposed Port: 3001
 - Network: bsv-network
